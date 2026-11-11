@@ -14,7 +14,7 @@ class PlaybookMatcherTests(unittest.TestCase):
         self.matcher = PlaybookMatcher(ROOT / "config" / "playbooks")
         self.maxwell = {
             "companion": {"prefab": "waxwell"},
-            "player": {"prefab": "waxwell"},
+            "player": {"prefab": "waxwell", "x": 96, "z": -32},
             "inventory_counts": {"silk": 7},
             "capabilities": {
                 "craftable_recipes": [
@@ -62,6 +62,39 @@ class PlaybookMatcherTests(unittest.TestCase):
         no_axe = dict(self.maxwell)
         no_axe["capabilities"] = {"craftable_recipes": []}
         self.assertIsNone(self.matcher.match("做一把斧头", no_axe))
+
+    def test_generic_local_commands_avoid_model_round_trip(self) -> None:
+        wendy = {
+            "companion": {"prefab": "wendy"},
+            "player": {"prefab": "waxwell", "x": 96, "z": -32},
+            "inventory_counts": {},
+            "capabilities": {},
+        }
+        follow = self.matcher.match("跟着我", wendy)
+        assert follow is not None
+        self.assertTrue(follow.direct)
+        self.assertEqual(follow.playbook_id, "generic.follow")
+        self.assertEqual(follow.intent["mode"], "follow")
+
+        grass = self.matcher.match("去采集附近的草", wendy)
+        assert grass is not None
+        self.assertTrue(grass.direct)
+        self.assertEqual(grass.playbook_id, "generic.collect_grass")
+        self.assertEqual(grass.intent["position"], [96, -32])
+        self.assertIn("grass", grass.intent["params"]["target_prefabs"])
+        self.assertIsNotNone(
+            self.matcher.match("帮我采一些附近的草", wendy)
+        )
+
+        sapling = self.matcher.match("帮我把附近的树枝采一下", wendy)
+        assert sapling is not None
+        self.assertEqual(sapling.intent["mode"], "harvest_area")
+        self.assertIn("sapling", sapling.intent["params"]["target_prefabs"])
+
+        twigs = self.matcher.match("捡一些地上的树枝", wendy)
+        assert twigs is not None
+        self.assertEqual(twigs.intent["mode"], "gather")
+        self.assertEqual(twigs.intent["params"]["target_prefabs"], ["twigs"])
 
     def test_gather_and_boss_candidates(self) -> None:
         gather = self.matcher.match("帮我收一下草和树枝", self.maxwell)

@@ -43,7 +43,7 @@ CROSS_WORLD_MODES = {
 }
 
 CROSS_WORLD_REPLY = (
-    "不能进入另一个世界。控制器已阻止这条指令：伴侣只能在当前世界行动，"
+    "不能进入另一个世界。控制器已阻止这条指令：微光只能在当前世界行动，"
     "过世界必须由你本人通过传送门或洞口带着它切换。"
 )
 
@@ -446,7 +446,7 @@ class CompanionService:
         self._chat_thread.start()
         self.journal.record(
             "service.started",
-            "伴侣控制器已启动",
+            "微光控制器已启动",
             data={"model": self.settings.deepseek_model, "port": self.settings.port},
         )
 
@@ -460,7 +460,7 @@ class CompanionService:
             self._ambient_thread.join(timeout=3)
         if self._chat_thread is not None:
             self._chat_thread.join(timeout=3)
-        self.journal.record("service.stopped", "伴侣控制器已停止")
+        self.journal.record("service.stopped", "微光控制器已停止")
         if not self._agent_memory_closed:
             self.agent_memory.close()
             self._agent_memory_closed = True
@@ -527,7 +527,7 @@ class CompanionService:
             self._last_expired_intent_id = state["intent"]["intent_id"]
             self.journal.record(
                 "task.expired",
-                "任务租约到期，伴侣返回默认跟随",
+                "任务租约到期，微光返回默认跟随",
                 level="warning",
                 data={"intent_id": state["intent"]["intent_id"]},
             )
@@ -934,15 +934,15 @@ class CompanionService:
                 else "info"
             )
             messages = {
-                "task_started": "伴侣开始执行任务",
-                "task_progress": "伴侣任务进度更新",
-                "task_complete": "伴侣确认任务完成",
-                "task_failed": "伴侣任务失败",
-                "task_blocked": "伴侣任务被游戏世界限制阻塞",
-                "item_acquired": "伴侣已取得目标物品",
-                "combat_target_defeated": "伴侣击败了战斗目标",
-                "combat_target_lost": "伴侣跟丢了战斗目标",
-                "world_transition": "伴侣已随你完成世界切换",
+                "task_started": "微光开始执行任务",
+                "task_progress": "微光任务进度更新",
+                "task_complete": "微光确认任务完成",
+                "task_failed": "微光任务失败",
+                "task_blocked": "微光任务被游戏世界限制阻塞",
+                "item_acquired": "微光已取得目标物品",
+                "combat_target_defeated": "微光击败了战斗目标",
+                "combat_target_lost": "微光跟丢了战斗目标",
+                "world_transition": "微光已随你完成世界切换",
                 "recovery_started": "微光开始自主恢复状态",
                 "recovery_completed": "微光完成自主恢复",
                 "recovery_unavailable": "微光当前无法安全自主恢复",
@@ -955,17 +955,17 @@ class CompanionService:
                 event_type == "combat_target_defeated"
                 and not event.get("verified")
             ):
-                message = "战斗目标已死亡，最后一击不是伴侣完成的"
+                message = "战斗目标已死亡，最后一击不是微光完成的"
             elif event_type == "task_failed" and reason == "combat_leash_exceeded":
-                message = "伴侣离用户超过战斗安全距离，已停止追击"
+                message = "微光离用户超过战斗安全距离，已停止追击"
             elif event_type == "task_failed" and reason == "shard_transition":
-                message = "伴侣随你切换世界，已中断原任务并回到跟随"
+                message = "微光随你切换世界，已中断原任务并回到跟随"
             elif event_type == "task_failed" and reason == "lethal_next_hit":
-                message = "伴侣判断下一次受击可能致命，已中断战斗并撤向玩家"
+                message = "微光判断下一次受击可能致命，已中断战斗并撤向玩家"
             elif event_type == "task_failed" and reason == "survival_hunger_low":
-                message = "伴侣饱食度不足且没有可用食物，已取消远行并返回跟随"
+                message = "微光饱食度不足且没有可用食物，已取消远行并返回跟随"
             elif event_type == "task_failed" and reason == "survival_health_low":
-                message = "伴侣生命值过低，已取消远行并返回跟随"
+                message = "微光生命值过低，已取消远行并返回跟随"
             elif event_type == "recovery_unavailable":
                 message = (
                     "微光无法自行恢复（"
@@ -989,7 +989,7 @@ class CompanionService:
                     str(event.get("item_prefab") or ""),
                     str(event.get("item_prefab") or "物品"),
                 )
-                message = f"伴侣收集完成：{item_name} {event.get('amount')} 个"
+                message = f"微光收集完成：{item_name} {event.get('amount')} 个"
             if reason and event_type not in {
                 "recovery_unavailable",
                 "emergency_detected",

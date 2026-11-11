@@ -14,11 +14,11 @@ class JournalTests(unittest.TestCase):
             journal = CompanionJournal(Path(tmp))
             event = journal.record(
                 "game.task_complete",
-                "伴侣确认任务完成",
+                "微光确认任务完成",
                 data={"intent_id": "fetch-1", "item_prefab": "goldnugget"},
             )
 
-            self.assertIn("伴侣确认任务完成", journal.latest_path.read_text("utf-8"))
+            self.assertIn("微光确认任务完成", journal.latest_path.read_text("utf-8"))
             daily = next(Path(tmp).glob("companion-*.jsonl"))
             line = json.loads(daily.read_text("utf-8").strip())
             self.assertEqual(line["seq"], event["seq"])

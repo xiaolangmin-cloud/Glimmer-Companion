@@ -331,7 +331,7 @@ class CompanionServiceTests(unittest.TestCase):
                     }
                 )
                 text = service.journal.latest_path.read_text(encoding="utf-8")
-                self.assertIn("伴侣确认任务完成", text)
+                self.assertIn("微光确认任务完成", text)
                 self.assertIn("game.task_complete", text)
                 self.assertEqual(
                     service.state()["log_path"],
@@ -385,8 +385,8 @@ class CompanionServiceTests(unittest.TestCase):
                     }
                 )
                 text = service.journal.latest_path.read_text(encoding="utf-8")
-                self.assertIn("最后一击不是伴侣完成的", text)
-                self.assertIn("伴侣离用户超过战斗安全距离，已停止追击", text)
+                self.assertIn("最后一击不是微光完成的", text)
+                self.assertIn("微光离用户超过战斗安全距离，已停止追击", text)
             finally:
                 service.stop()
                 service.memory.close()
@@ -446,7 +446,7 @@ class CompanionServiceTests(unittest.TestCase):
                 self.assertEqual(intent["mode"], "follow")
                 self.assertEqual(intent["reason"], "shard_transition_follow")
                 text = service.journal.latest_path.read_text(encoding="utf-8")
-                self.assertIn("伴侣随你切换世界", text)
+                self.assertIn("微光随你切换世界", text)
                 self.assertIn("shard_transition", text)
             finally:
                 service.stop()
@@ -793,7 +793,12 @@ class CompanionServiceTests(unittest.TestCase):
                 service.tick(
                     {
                         "companion": {"prefab": "waxwell"},
-                        "player": {"guid": "1", "prefab": "waxwell"},
+                        "player": {
+                            "guid": "1",
+                            "prefab": "waxwell",
+                            "x": 40,
+                            "z": -12,
+                        },
                         "world": {"shard": "1", "is_master": True},
                         "nearby": [],
                         "events": [],
@@ -803,6 +808,13 @@ class CompanionServiceTests(unittest.TestCase):
                 self.assertEqual(state["playbook_matched"], "maxwell.collect_spider_silk")
                 self.assertEqual(state["intent"]["mode"], "collect_loot")
                 self.assertIn("蜘蛛丝", state["messages"][-1]["text"])
+                grass = service.message("去采集附近的草")
+                self.assertEqual(
+                    grass["playbook_matched"],
+                    "generic.collect_grass",
+                )
+                self.assertEqual(grass["intent"]["mode"], "harvest_area")
+                self.assertEqual(grass["intent"]["position"], [40, -12])
                 forced = service.message(
                     "别管饱食度，务必去帮我打十个蜘蛛丝"
                 )

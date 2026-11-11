@@ -19,15 +19,17 @@ IMPLEMENTATION_NOTES: tuple[dict[str, str], ...] = (
     },
     {
         "topic": "微光 Mod - 角色选择与切换",
-        "summary": "默认麦斯威尔，本地网页选人并支持运行时安全切换",
-        "tags": "mod 选人 麦斯威尔 waxwell 沃尔特 walter 角色 切换 窗口 背包 装备",
+        "summary": "默认麦斯威尔，本地网页选人、皮肤继承和运行时安全切换",
+        "tags": "mod 选人 麦斯威尔 waxwell 沃尔特 walter 角色 皮肤 服装 切换 窗口 背包 装备",
         "content": (
             "控制器提供 /character 本地网页和 /companion-character 接口，"
             "选择持久保存到 state/companion_character.json。默认角色是 "
             "waxwell（麦斯威尔）。游戏内微光检测到选择变化后中断恢复和当前任务，"
             "把背包及装备丢在脚下，清除旧角色持久档案，再以新角色在玩家身边重生。"
             "首次生成也会读取控制器选择，而不是被旧角色记录覆盖。切换完成后会"
-            "在聊天栏说明新角色。"
+            "在聊天栏说明新角色。微光与玩家同角色时复制玩家当前整套角色皮肤；"
+            "角色不同时会读取 Profile:GetSkinsForCharacter 中玩家为该角色配置的"
+            "基础、身体、手、腿、脚皮肤并校验所有权，运行时换装也会周期同步。"
         ),
     },
     {
@@ -45,6 +47,9 @@ IMPLEMENTATION_NOTES: tuple[dict[str, str], ...] = (
             "制作和建造采用状态锁，带放置物建筑分两阶段制作与部署；进食使用标准 "
             "EAT 动作。当前运行时不能自行修改 Lua 源码；如果能力缺失，模型应返回 "
             "capability_gap 并明确告知用户，由新的 Codex 开发会话实现。"
+            "config/playbooks/generic.json 会把跟随、等待、撤退及附近草、树枝、"
+            "浆果、胡萝卜、花、"
+            "芦苇等简单采集请求直接路由成本地意图，不调用 DeepSeek。"
         ),
     },
     {
@@ -121,7 +126,7 @@ IMPLEMENTATION_NOTES: tuple[dict[str, str], ...] = (
             "Lua 到控制器的请求带有代次和约 5 秒超时；旧控制器退出导致回调不返回时，"
             "执行器会恢复 pending_request 并重新发送未确认事件，避免聊天栏和任务冻结。"
             "快照携带 DST 主会话 ID，控制器发现进入新会话时自动清除旧任务并切回 "
-            "follow。伴侣 profile 以 KLEI 持久化格式保存，解码时会先剥离 `KLEI 1` "
+            "follow。微光 profile 以 KLEI 持久化格式保存，解码时会先剥离 `KLEI 1` "
             "头并避免重复添加 return。范围采集会先导航到目标坐标，再连续处理匹配的 "
             "target_prefab；空区域明确报告 target_not_found，不能假报完成。"
         ),

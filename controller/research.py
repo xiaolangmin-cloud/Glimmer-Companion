@@ -43,7 +43,7 @@ class CodexResearchService:
             command_prefix = [executable]
 
         prompt = (
-            "你是《饥荒联机版》伴侣的资料研究员。只做只读资料查询，不修改任何文件，"
+            "你是《饥荒联机版》微光的资料研究员。只做只读资料查询，不修改任何文件，"
             "不执行游戏，不调用本地控制器。优先查官方或可靠攻略，并交叉核对。"
             "只输出 JSON，结构为："
             '{"topic":"", "summary":"", "steps":[], "ingredients":'

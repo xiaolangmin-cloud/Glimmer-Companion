@@ -1,0 +1,210 @@
+{
+  "schema": 1,
+  "display_name": "通用即时指令",
+  "playbooks": [
+    {
+      "id": "generic.follow",
+      "task_type": "movement",
+      "priority": 66,
+      "patterns": [
+        "^(?:跟着我|跟我走|跟紧我|过来|来到我身边|回到我身边|别乱跑)[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我跟着你。",
+      "intent": {
+        "mode": "follow",
+        "lease_seconds": 86400,
+        "reason": "local_command_follow"
+      }
+    },
+    {
+      "id": "generic.hold",
+      "task_type": "movement",
+      "priority": 68,
+      "patterns": [
+        "^(?:在这里等|原地等|停在这里|待在这里|别动|不要动)[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我在这里等你。",
+      "intent": {
+        "mode": "hold",
+        "lease_seconds": 86400,
+        "reason": "local_command_hold"
+      }
+    },
+    {
+      "id": "generic.retreat",
+      "task_type": "combat",
+      "priority": 102,
+      "patterns": [
+        "^(?:撤退|快跑|回来保护我|别追了|回来)[。！!]*$"
+      ],
+      "exclude_patterns": [
+        "死战",
+        "不要逃",
+        "别逃"
+      ],
+      "direct": true,
+      "reply": "好，停止战斗并回到你身边。",
+      "intent": {
+        "mode": "retreat",
+        "lease_seconds": 120,
+        "reason": "local_command_retreat"
+      }
+    },
+    {
+      "id": "generic.collect_grass",
+      "task_type": "gathering",
+      "priority": 88,
+      "patterns": [
+        "^(?:去|帮我|给我)?(?:采集|采|摘|收|收获|收割)(?:一下|一些|一点)?(?:附近|周围|旁边)(?:的)?(?:草|青草)(?:吧|一下)?[。！!]*$",
+        "^(?:帮我|给我)?(?:把|将)?(?:附近|周围|旁边)(?:的)?(?:草|青草)(?:都|全)?(?:采|摘|收)(?:了|一下|掉)?[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我现在去采附近的草。",
+      "intent": {
+        "mode": "harvest_area",
+        "position": "$player_position",
+        "lease_seconds": 600,
+        "reason": "local_collect_nearby_grass",
+        "params": {
+          "radius": 24,
+          "arrive_distance": 4,
+          "target_prefabs": ["grass", "grass_tall", "grass_moon"]
+        }
+      }
+    },
+    {
+      "id": "generic.collect_saplings",
+      "task_type": "gathering",
+      "priority": 87,
+      "patterns": [
+        "^(?:去|帮我|给我)?(?:采集|采|摘|收|收获|割)(?:一下|一些|一点)?(?:附近|周围|旁边)(?:的)?(?:树枝|树枝丛|树苗)(?:吧|一下)?[。！!]*$",
+        "^(?:帮我|给我)?(?:把|将)?(?:附近|周围|旁边)(?:的)?(?:树枝|树枝丛|树苗)(?:都|全)?(?:采|摘|收|割)(?:了|一下|掉)?[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我现在去收附近的树枝。",
+      "intent": {
+        "mode": "harvest_area",
+        "position": "$player_position",
+        "lease_seconds": 600,
+        "reason": "local_collect_nearby_saplings",
+        "params": {
+          "radius": 24,
+          "arrive_distance": 4,
+          "target_prefabs": ["sapling", "sapling_moon"]
+        }
+      }
+    },
+    {
+      "id": "generic.gather_twigs",
+      "task_type": "gathering",
+      "priority": 89,
+      "patterns": [
+        "^(?:去|帮我|给我)?(?:捡|拾取|收集|捡起)(?:一下)?(?:一些|一点)?(?:附近|周围|地上)(?:的)?(?:树枝|小树枝)(?:吧|一下)?[。！!]*$",
+        "^(?:帮我|给我)?(?:把|将)?(?:附近|周围|地上)(?:的)?(?:树枝|小树枝)(?:都|全)?(?:捡|拾取|收集)(?:了|一下|起来)?[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我现在去捡附近的树枝。",
+      "intent": {
+        "mode": "gather",
+        "position": "$player_position",
+        "lease_seconds": 600,
+        "reason": "local_gather_nearby_twigs",
+        "params": {
+          "radius": 24,
+          "arrive_distance": 4,
+          "target_prefabs": ["twigs"]
+        }
+      }
+    },
+    {
+      "id": "generic.collect_berries",
+      "task_type": "gathering",
+      "priority": 86,
+      "patterns": [
+        "^(?:去|帮我|给我)?(?:采集|采|摘|收|收获)(?:一下|一些|一点)?(?:附近|周围|旁边)(?:的)?(?:浆果|浆果丛|莓果)(?:吧|一下)?[。！!]*$",
+        "^(?:帮我|给我)?(?:把|将)?(?:附近|周围|旁边)(?:的)?(?:浆果|浆果丛|莓果)(?:都|全)?(?:采|摘|收)(?:了|一下|掉)?[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我现在去摘附近的浆果。",
+      "intent": {
+        "mode": "harvest_area",
+        "position": "$player_position",
+        "lease_seconds": 600,
+        "reason": "local_collect_nearby_berries",
+        "params": {
+          "radius": 24,
+          "arrive_distance": 4,
+          "target_prefabs": ["berrybush", "berrybush2", "berrybush_juicy", "berrybush_moon"]
+        }
+      }
+    },
+    {
+      "id": "generic.collect_carrots",
+      "task_type": "gathering",
+      "priority": 85,
+      "patterns": [
+        "^(?:去|帮我|给我)?(?:采集|采|拔|收|收获)(?:一下|一些|一点)?(?:附近|周围|旁边)(?:的)?(?:胡萝卜|萝卜)(?:吧|一下)?[。！!]*$",
+        "^(?:帮我|给我)?(?:把|将)?(?:附近|周围|旁边)(?:的)?(?:胡萝卜|萝卜)(?:都|全)?(?:采|拔|收)(?:了|一下|掉)?[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我现在去拔附近的胡萝卜。",
+      "intent": {
+        "mode": "harvest_area",
+        "position": "$player_position",
+        "lease_seconds": 600,
+        "reason": "local_collect_nearby_carrots",
+        "params": {
+          "radius": 24,
+          "arrive_distance": 4,
+          "target_prefabs": ["carrot", "carrot_planted"]
+        }
+      }
+    },
+    {
+      "id": "generic.collect_flowers",
+      "task_type": "gathering",
+      "priority": 84,
+      "patterns": [
+        "^(?:去|帮我|给我)?(?:采集|采|摘|收|收获)(?:一下|一些|一点)?(?:附近|周围|旁边)(?:的)?(?:花|花朵)(?:吧|一下)?[。！!]*$",
+        "^(?:帮我|给我)?(?:把|将)?(?:附近|周围|旁边)(?:的)?(?:花|花朵)(?:都|全)?(?:采|摘|收)(?:了|一下|掉)?[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我现在去摘附近的花。",
+      "intent": {
+        "mode": "harvest_area",
+        "position": "$player_position",
+        "lease_seconds": 600,
+        "reason": "local_collect_nearby_flowers",
+        "params": {
+          "radius": 24,
+          "arrive_distance": 4,
+          "target_prefabs": ["flower", "flower_evil", "flower_rose"]
+        }
+      }
+    },
+    {
+      "id": "generic.collect_reeds",
+      "task_type": "gathering",
+      "priority": 84,
+      "patterns": [
+        "^(?:去|帮我|给我)?(?:采集|采|割|收|收获)(?:一下|一些|一点)?(?:附近|周围|旁边)(?:的)?(?:芦苇|香蒲)(?:吧|一下)?[。！!]*$",
+        "^(?:帮我|给我)?(?:把|将)?(?:附近|周围|旁边)(?:的)?(?:芦苇|香蒲)(?:都|全)?(?:采|割|收)(?:了|一下|掉)?[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我现在去割附近的芦苇。",
+      "intent": {
+        "mode": "harvest_area",
+        "position": "$player_position",
+        "lease_seconds": 600,
+        "reason": "local_collect_nearby_reeds",
+        "params": {
+          "radius": 24,
+          "arrive_distance": 4,
+          "target_prefabs": ["reeds", "reeds_water"]
+        }
+      }
+    }
+  ]
+}

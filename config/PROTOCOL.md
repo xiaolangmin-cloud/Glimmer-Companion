@@ -23,7 +23,7 @@ POST /companion-character  {"prefab":"waxwell"}
 `POST /start` 请求拉起完整控制器，并轮询 `GET /status`。连接开始、控制器启动中和
 连接成功的状态都会发送到游戏聊天栏；只有控制器 `/health` 就绪后才会生成微光。
 
-伴侣回复通过游戏内对话气泡显示。控制器终端只显示日志和回复，不再接受键盘输入。
+微光回复通过游戏内对话气泡显示。控制器终端只显示日志和回复，不再接受键盘输入。
 
 用户自然语言指令发送到：
 
@@ -43,23 +43,25 @@ Content-Type: application/json
 5. 任务超过 `lease_seconds` 后自动回到默认 `follow`；明确 `hold` 不受影响。
 6. DeepSeek 调用失败时不切换到无关的新任务，只保留旧任务直到过期。
 7. 远距离移动由执行器持续寻路；20 秒没有接近目标时报告 `task_failed/path_stuck`。
-8. 地面与洞穴切换时，执行器会中断旧世界的任务、携带完整伴侣存档迁移，并报告
-   `task_failed/shard_transition`；控制器随后把伴侣切回 `follow`。
+8. 地面与洞穴切换时，执行器会中断旧世界的任务、携带完整微光存档迁移，并报告
+   `task_failed/shard_transition`；控制器随后把微光切回 `follow`。
 9. 控制器在意图写入仲裁器之前检查 `target_shard`、其他世界字段和地标所在世界。
    目标世界与当前 `world.shard` 不同，或模式本身是跨世界迁移时，控制器直接改为
    `hold/cross_world_forbidden`，记录 `controller.cross_world_blocked`，并向用户说明
-   必须由用户本人带伴侣过图。该限制同样覆盖手动 `/command`。
-10. 伴侣是服务端永不休眠实体，并维护自身附近行动单位的独立唤醒区域。
+   必须由用户本人带微光过图。该限制同样覆盖手动 `/command`。
+10. 微光是服务端永不休眠实体，并维护自身附近行动单位的独立唤醒区域。
 11. 战斗默认带致命伤保护。估算下一次受击足以致死时，执行器停止战斗、撤回玩家
     并发送 `task_failed/lethal_next_hit`。只有明确设置
     `params.fight_to_death=true` 或 `params.retreat_on_lethal=false` 才关闭。
-12. 复杂目标使用持久化 `plan`。计划与技能资料、伴侣聊天、世界资源位置写入
+12. 复杂目标使用持久化 `plan`。计划与技能资料、微光聊天、世界资源位置写入
     `state/agent_memory.sqlite3`，不写入用户整体记忆库。
 13. 缺少可靠游戏知识时，模型可返回 `research_query`。控制器调用只读 Codex
-    研究会话查询网络，结果写入伴侣独立技能记忆后再次规划。
+    研究会话查询网络，结果写入微光独立技能记忆后再次规划。
 14. 游戏聊天先经过本地角色任务匹配器。高置信度预案直接生成意图，不调用模型；
     复杂或部分匹配预案作为 `matched_playbooks` 提供给 DeepSeek 做小幅适配。
-    当前仅启用麦斯威尔 `waxwell` 预案。
+    当前麦斯威尔 `waxwell` 有完整角色预案，`generic.json` 提供与角色无关的即时
+    移动和常见采集指令。说“跟着我”“在这里等”“撤退”或采附近的草、树枝、
+    浆果、胡萝卜、花、芦苇时，控制器直接生成意图，不等待模型。
 15. 模型发现执行器确实缺少能力时返回 `capability_gap`。控制器停止当前动作，
     在游戏聊天中说明原因，并把功能、缺口和建议实现写入 `capability_gaps`。
 16. 远距离移动、采集和收集任务开始前及执行中检查生命与饱食度。饥饿低于阈值时
@@ -67,9 +69,9 @@ Content-Type: application/json
     `task_failed/survival_hunger_low`。用户明确要求无视这些风险时，意图必须设置
     `params.ignore_survival_safety=true` 或 `params.survival_policy="force"`，
     控制器不得再硬性阻止任务。
-17. 伴侣会把已经过的位置持续写入玩家 `MapExplorer`，因此伴侣探索的新区域会同步
-    显示在玩家地图上；伴侣自身保留玩家预制体的地图头像标记。附近资源、容器和
-    工作对象位置会按约 8 格粒度写入伴侣独立世界记忆。
+17. 微光会把已经过的位置持续写入玩家 `MapExplorer`，因此微光探索的新区域会同步
+    显示在玩家地图上；微光自身保留玩家预制体的地图头像标记。附近资源、容器和
+    工作对象位置会按约 8 格粒度写入微光独立世界记忆。
 18. 默认跟随且没有新任务时，执行器可以自主使用随身食物和治疗物品，并在安全时
     前往附近帐篷恢复生命与精神。普通恢复要求至少约 60 秒可睡；生命低于 35%
     或精神低于 20% 时，才允许在剩余 30 秒以上时紧急休息。执行器会计算预计恢复量、
@@ -93,6 +95,9 @@ Content-Type: application/json
     `follow/session_started_follow`，避免退出再进入世界后继续旧房间的采集或战斗。
     Lua 网络请求带代次与约 5 秒超时；控制器重启、连接重置或回调丢失后会自动恢复
     上报，不会永久卡在 `pending_request`。
+22. 微光生成及周期监督时会同步玩家角色皮肤。若微光与玩家当前角色相同，直接复制
+    当前实体整套服装；若不同，则通过 `Profile:GetSkinsForCharacter` 读取玩家为
+    所选角色保存的皮肤，并校验所有权后应用。运行时换装会在数秒内同步。
 
 ## 战斗契约
 
@@ -111,14 +116,14 @@ Content-Type: application/json
 ```
 
 `retreat_hp` 为 `null` 表示没有授权撤退。执行器可以闪避，但不能自行退出战斗。
-`retreat` 在没有指定 `position` 时表示停止战斗并返回玩家身边。战斗目标导致伴侣
+`retreat` 在没有指定 `position` 时表示停止战斗并返回玩家身边。战斗目标导致微光
 离玩家超过模组配置的安全距离时，执行器会上报
 `task_failed/combat_leash_exceeded` 并停止追击。
 
 ## 回复与任务
 
 模型响应同时包含 `reply` 和 `intent`。`reply` 用于向用户汇报或提问，
-`intent` 决定伴侣接下来执行什么。
+`intent` 决定微光接下来执行什么。
 
 ```json
 {
@@ -232,7 +237,7 @@ Content-Type: application/json
 
 ## 角色能力与生产
 
-伴侣与玩家使用相同角色时会复制玩家当前技能树选择。观察中的
+微光与玩家使用相同角色时会复制玩家当前技能树选择。观察中的
 `capabilities.skills` 是当前已激活技能，`capabilities.skill_actions` 是执行器
 可以调用的角色特殊动作白名单。
 

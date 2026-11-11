@@ -155,14 +155,28 @@ class PlaybookMatcher:
         return matches
 
     @staticmethod
-    def _replace_values(value: Any, amount: int) -> Any:
+    def _replace_values(
+        value: Any,
+        amount: int,
+        snapshot: dict[str, Any],
+    ) -> Any:
         if value == "$amount":
             return amount
+        if value == "$player_position":
+            player = snapshot.get("player") or {}
+            x = player.get("x")
+            z = player.get("z")
+            if isinstance(x, (int, float)) and isinstance(z, (int, float)):
+                return [x, z]
+            return None
         if isinstance(value, list):
-            return [PlaybookMatcher._replace_values(item, amount) for item in value]
+            return [
+                PlaybookMatcher._replace_values(item, amount, snapshot)
+                for item in value
+            ]
         if isinstance(value, dict):
             return {
-                key: PlaybookMatcher._replace_values(item, amount)
+                key: PlaybookMatcher._replace_values(item, amount, snapshot)
                 for key, item in value.items()
             }
         return value
@@ -192,7 +206,7 @@ class PlaybookMatcher:
         amount = _parse_number(message) or int(playbook.get("default_amount") or 1)
         intent = copy.deepcopy(playbook.get("intent"))
         if isinstance(intent, dict):
-            intent = self._replace_values(intent, amount)
+            intent = self._replace_values(intent, amount, snapshot)
             if self._forces_survival_override(message):
                 params = intent.setdefault("params", {})
                 if isinstance(params, dict):

@@ -183,7 +183,7 @@ class DeepSeekPlanner:
                         + trigger
                         + "\n\n可能相关的长期记忆：\n"
                         + (memory_context or "无")
-                        + "\n\n伴侣独立技能记忆（不是用户个人记忆）：\n"
+                        + "\n\n微光独立技能记忆（不是用户个人记忆）：\n"
                         + (skill_context or "无")
                         + "\n\n微光项目实现记忆（不是用户个人记忆）：\n"
                         + (implementation_context or "无")
@@ -193,13 +193,13 @@ class DeepSeekPlanner:
                             ensure_ascii=False,
                             separators=(",", ":"),
                         )
-                        + "\n\n伴侣独立聊天室最近对话：\n"
+                        + "\n\n微光独立聊天室最近对话：\n"
                         + json.dumps(
                             recent_chat,
                             ensure_ascii=False,
                             separators=(",", ":"),
                         )
-                        + "\n\n伴侣记录过的当前世界资源与容器位置：\n"
+                        + "\n\n微光记录过的当前世界资源与容器位置：\n"
                         + json.dumps(
                             world_context,
                             ensure_ascii=False,

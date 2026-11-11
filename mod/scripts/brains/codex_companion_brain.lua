@@ -4459,7 +4459,7 @@ function CodexCompanionBrain:SpeechTick()
     if self.inst.components.talker ~= nil and message ~= nil then
         self.inst.components.talker:Say(message, 4)
         if TheNet ~= nil then
-            TheNet:Announce("[伴侣] " .. message, nil, nil, "default")
+            TheNet:Announce("[微光] " .. message, nil, nil, "default")
         end
         self.last_speech_at = GetTime()
     end

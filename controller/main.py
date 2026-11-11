@@ -16,7 +16,7 @@ def _message_loop(service: CompanionService) -> None:
             if message_id in seen:
                 continue
             seen.add(message_id)
-            print(f"[伴侣] {message.get('text', '')}")
+            print(f"[微光] {message.get('text', '')}")
         time.sleep(0.4)
 
 def _log_loop(service: CompanionService) -> None:

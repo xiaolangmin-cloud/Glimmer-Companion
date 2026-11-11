@@ -22,6 +22,10 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn("ConfigurePlayerLocomotor", source)
         self.assertIn("GetPlayerSkillSelection()", source)
         self.assertIn("SetPlayerSkillSelection(selection)", source)
+        self.assertIn("CopyOwnerCharacterSkin(companion, player)", source)
+        self.assertIn("CopySkinsFromPlayer(player)", source)
+        self.assertIn("GetSkinsForCharacter(companion.prefab)", source)
+        self.assertIn("companion.AnimState:AssignItemSkins(", source)
         self.assertIn('string.gsub(raw, "^KLEI%s+%d+%s+"', source)
         self.assertIn("target_builder.recipes = {}", source)
         self.assertIn("table.insert(target_builder.recipes, recipe_name)", source)
@@ -69,7 +73,7 @@ class LuaRuntimeContractTests(unittest.TestCase):
         brain = (
             ROOT / "mod" / "scripts" / "brains" / "codex_companion_brain.lua"
         ).read_text(encoding="utf-8")
-        self.assertIn('TheNet:Announce("[伴侣] " .. message', brain)
+        self.assertIn('TheNet:Announce("[微光] " .. message', brain)
 
     def test_controller_has_no_voice_or_console_input_path(self) -> None:
         main = (ROOT / "controller" / "main.py").read_text(encoding="utf-8")

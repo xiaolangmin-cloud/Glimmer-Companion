@@ -441,6 +441,122 @@ local function CopyOwnerCapabilities(companion, player)
     end
 end
 
+local function CopyOwnerCharacterSkin(companion, player)
+    if companion == nil
+        or player == nil
+        or not companion:IsValid()
+        or not player:IsValid()
+        or companion.components.skinner == nil
+    then
+        return false
+    end
+    local companion_skinner = companion.components.skinner
+    local player_skinner = player.components.skinner
+    if companion.prefab == player.prefab
+        and player_skinner ~= nil
+    then
+        local current = companion_skinner:GetClothing()
+        local wanted = player_skinner:GetClothing()
+        local matches = current.base == wanted.base
+            and current.body == wanted.body
+            and current.hand == wanted.hand
+            and current.legs == wanted.legs
+            and current.feet == wanted.feet
+            and companion_skinner:GetSkinMode() == player_skinner:GetSkinMode()
+        if matches then
+            return false
+        end
+        companion_skinner:CopySkinsFromPlayer(player)
+        print(
+            "[Glimmer Companion] inherited character skin",
+            companion.prefab,
+            wanted.base,
+            wanted.body,
+            wanted.hand,
+            wanted.legs,
+            wanted.feet
+        )
+        return true
+    end
+
+    local profile = GLOBAL.Profile
+    if profile == nil
+        or type(profile.GetSkinsForCharacter) ~= "function"
+    then
+        return false
+    end
+    local configured = profile:GetSkinsForCharacter(companion.prefab)
+    if type(configured) ~= "table" then
+        return false
+    end
+    local base = type(configured.base) == "string"
+        and configured.base
+        or companion.prefab .. "_none"
+    local inventory = GLOBAL.TheInventory
+    local function Owned(skin)
+        return type(skin) ~= "string"
+            or skin == ""
+            or inventory == nil
+            or type(inventory.CheckClientOwnership) ~= "function"
+            or inventory:CheckClientOwnership(player.userid, skin)
+    end
+    if base ~= companion.prefab .. "_none" and not Owned(base) then
+        base = companion.prefab .. "_none"
+    end
+    local current = companion_skinner:GetClothing()
+    local wanted = {
+        base = base,
+        body = Owned(configured.body) and (configured.body or "") or "",
+        hand = Owned(configured.hand) and (configured.hand or "") or "",
+        legs = Owned(configured.legs) and (configured.legs or "") or "",
+        feet = Owned(configured.feet) and (configured.feet or "") or "",
+    }
+    local matches = current.base == wanted.base
+        and current.body == wanted.body
+        and current.hand == wanted.hand
+        and current.legs == wanted.legs
+        and current.feet == wanted.feet
+    if matches then
+        return false
+    end
+    companion_skinner.clothing.body = wanted.body
+    companion_skinner.clothing.hand = wanted.hand
+    companion_skinner.clothing.legs = wanted.legs
+    companion_skinner.clothing.feet = wanted.feet
+    companion_skinner.monkey_curse = nil
+    companion_skinner.copiedplayer_data = {
+        prefab = companion.prefab,
+        userid = player.userid,
+    }
+    if companion.AnimState ~= nil
+        and inventory ~= nil
+        and type(inventory.CheckClientOwnership) == "function"
+        and player.userid ~= nil
+        and player.userid ~= ""
+    then
+        companion.AnimState:AssignItemSkins(
+            player.userid,
+            wanted.base,
+            wanted.body,
+            wanted.hand,
+            wanted.legs,
+            wanted.feet
+        )
+    end
+    companion_skinner:SetSkinName(wanted.base, true)
+    companion_skinner:SetSkinMode("normal_skin")
+    print(
+        "[Glimmer Companion] inherited configured character skin",
+        companion.prefab,
+        wanted.base,
+        wanted.body,
+        wanted.hand,
+        wanted.legs,
+        wanted.feet
+    )
+    return true
+end
+
 local function SaveCompanionState(inst)
     if inst == nil
         or not inst:IsValid()
@@ -716,6 +832,7 @@ local function FinishCompanionSpawn(
 
     CopyOwnerCapabilities(companion, player)
     PrepareCompanionEntity(companion)
+    CopyOwnerCharacterSkin(companion, player)
     local identity = GetCompanionIdentity(
         player,
         migration_state ~= nil and migration_state.identity_id
@@ -1002,6 +1119,10 @@ local function StartCompanionSupervisor(world)
         end
         MakeServerNonSleepable(companion)
         EnsureLocomotor(companion)
+        local player = GetPrimaryPlayer(companion)
+        if player ~= nil then
+            CopyOwnerCharacterSkin(companion, player)
+        end
     end)
     print("[Glimmer Companion] supervisor active")
 end
