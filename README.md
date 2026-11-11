@@ -8,7 +8,24 @@
 单人服务器限制。DeepSeek 负责任务级规划，Lua 执行层负责实时寻路、战斗、采集、
 制作、技能动作、安全撤退与状态持久化。
 
+仓库地址：
+
+```text
+https://github.com/xiaolangmin-cloud/dst-codex-companion
+```
+
+最新 Mod 包：
+
+```text
+https://github.com/xiaolangmin-cloud/dst-codex-companion/releases/latest
+```
+
 ## 快速开始
+
+```powershell
+git clone https://github.com/xiaolangmin-cloud/dst-codex-companion.git
+cd dst-codex-companion
+```
 
 ### 1. 环境要求
 
