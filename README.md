@@ -2,7 +2,7 @@
 
 一个不使用第二个真实玩家的《饥荒联机版》AI 伙伴项目。
 
-当前版本：`0.12.1`
+当前版本：`0.13.0`
 
 "微光"是服务器内的非联网角色实体，不会占用额外玩家名额，也不会破坏“独行长路”的
 单人服务器限制。DeepSeek 负责任务级规划，Lua 执行层负责实时寻路、战斗、采集、
@@ -108,6 +108,26 @@ open_character_selector.cmd
 
 ```powershell
 [Environment]::SetEnvironmentVariable("CODEX_COMPANION_CHARACTER", "waxwell", "User")
+```
+
+### 6. 游戏启动时自动启动控制器
+
+双击一次：
+
+```text
+install_game_autostart.cmd
+```
+
+安装器会创建当前用户的登录启动快捷方式，并启动一个隐藏的游戏进程监视器。检测到
+`dontstarve_steam_x64` 或 `dontstarve_steam` 启动后，它会立即隐藏启动控制器并等待
+`http://127.0.0.1:8765/health` 就绪。正常的主菜单和读档时间足够控制器先启动完成。
+
+如果控制器在游戏启动前已经手动运行，监视器不会重复启动；如果控制器由监视器启动，
+游戏关闭后它会将该控制器一并停止。监视器每 3 秒检查一次游戏进程。可运行以下文件
+移除登录自启动并停止监视器：
+
+```text
+uninstall_game_autostart.cmd
 ```
 
 ## 主要能力

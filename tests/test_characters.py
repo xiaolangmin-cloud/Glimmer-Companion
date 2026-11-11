@@ -45,6 +45,29 @@ class CharacterPreferenceTests(unittest.TestCase):
         self.assertIn("/character", script)
         self.assertIn("MessageBox", script)
 
+    def test_game_autostart_watcher_detects_client_and_manages_controller(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        watcher = (root / "companion_game_watcher.ps1").read_text(
+            encoding="utf-8"
+        )
+        installer = (root / "install_game_autostart.ps1").read_text(
+            encoding="utf-8"
+        )
+        uninstaller = (root / "uninstall_game_autostart.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"dontstarve_steam_x64"', watcher)
+        self.assertIn('"dontstarve_steam"', watcher)
+        self.assertIn('"/health"', watcher)
+        self.assertIn('"python"', watcher)
+        self.assertIn("Start-Sleep -Seconds 3", watcher)
+        self.assertIn("Stop-AutoController", watcher)
+        self.assertIn("Glimmer Companion Game Watcher.lnk", installer)
+        self.assertIn("Glimmer Companion Game Watcher.lnk", uninstaller)
+
 
 if __name__ == "__main__":
     unittest.main()
