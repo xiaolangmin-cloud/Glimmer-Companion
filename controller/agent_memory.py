@@ -19,6 +19,15 @@ class SkillHit:
     updated_at: float
 
 
+@dataclass(frozen=True)
+class ImplementationHit:
+    topic: str
+    summary: str
+    content: str
+    tags: str
+    updated_at: float
+
+
 class AgentMemoryStore:
     """Dedicated companion memory isolated from the user's general vault."""
 
@@ -99,6 +108,22 @@ class AgentMemoryStore:
             )
             self._sqlite.execute(
                 """
+                CREATE TABLE IF NOT EXISTS implementation_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    topic TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 0.9,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    UNIQUE(topic, source)
+                )
+                """
+            )
+            self._sqlite.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_skill_topic
                 ON skill_notes(topic)
                 """
@@ -113,6 +138,12 @@ class AgentMemoryStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_world_shard_prefab
                 ON world_notes(shard, prefab, updated_at)
+                """
+            )
+            self._sqlite.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_implementation_topic
+                ON implementation_notes(topic, updated_at)
                 """
             )
 
@@ -207,6 +238,186 @@ class AgentMemoryStore:
             f"[技能记忆] {hit.topic}（来源 {hit.source}）\n{hit.content}"
             for hit in hits
         )
+
+    def remember_implementation_note(
+        self,
+        topic: str,
+        summary: str,
+        content: str,
+        *,
+        tags: str = "",
+        source: str = "project",
+        confidence: float = 0.9,
+    ) -> None:
+        topic = topic.strip()
+        summary = summary.strip()
+        content = content.strip()
+        if not topic or not content:
+            raise ValueError(
+                "implementation topic and content must not be empty"
+            )
+        now = time.time()
+        with self._lock, self._sqlite:
+            self._sqlite.execute(
+                """
+                INSERT INTO implementation_notes(
+                    topic, summary, content, tags, source, confidence,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(topic, source) DO UPDATE SET
+                    summary=excluded.summary,
+                    content=excluded.content,
+                    tags=excluded.tags,
+                    confidence=excluded.confidence,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    topic,
+                    summary,
+                    content,
+                    tags.strip(),
+                    source,
+                    max(0.0, min(float(confidence), 1.0)),
+                    now,
+                    now,
+                ),
+            )
+
+    def seed_implementation_notes(
+        self,
+        notes: tuple[dict[str, str], ...],
+    ) -> None:
+        for note in notes:
+            self.remember_implementation_note(
+                note["topic"],
+                note.get("summary", ""),
+                note["content"],
+                tags=note.get("tags", ""),
+                source="glimmer-project",
+                confidence=0.95,
+            )
+
+    @staticmethod
+    def _implementation_terms(query: str) -> list[str]:
+        lowered = query.lower()
+        markers = (
+            "mod",
+            "微光",
+            "控制器",
+            "启动桥",
+            "快捷方式",
+            "实现",
+            "能力",
+            "功能",
+            "动作",
+            "程序",
+            "代码",
+            "支持",
+            "能不能",
+            "能否",
+            "选人",
+            "角色切换",
+        )
+        if not any(marker in lowered for marker in markers):
+            return []
+        terms: list[str] = []
+
+        def add(term: str) -> None:
+            term = term.strip()
+            if term and term not in terms:
+                terms.append(term)
+
+        for term in re.findall(r"[0-9A-Za-z_]+", lowered):
+            if len(term) >= 2:
+                add(term)
+        for sequence in re.findall(r"[\u3400-\u9fff]+", lowered):
+            add(sequence)
+            for width in (2, 3, 4):
+                if len(sequence) < width:
+                    continue
+                for index in range(len(sequence) - width + 1):
+                    add(sequence[index : index + width])
+            if len(terms) >= 36:
+                break
+        return terms[:36]
+
+    def search_implementation_notes(
+        self,
+        query: str,
+        limit: int = 4,
+    ) -> list[ImplementationHit]:
+        terms = self._implementation_terms(query)
+        if not terms:
+            return []
+        clauses = " OR ".join(
+            "(topic LIKE ? OR summary LIKE ? OR content LIKE ? OR tags LIKE ?)"
+            for _ in terms
+        )
+        params: list[Any] = []
+        for term in terms:
+            pattern = f"%{term}%"
+            params.extend((pattern, pattern, pattern, pattern))
+        params.append(max(limit * 12, 24))
+        with self._lock:
+            rows = self._sqlite.execute(
+                f"""
+                SELECT topic, summary, content, tags, updated_at
+                FROM implementation_notes
+                WHERE {clauses}
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        ranked = sorted(
+            rows,
+            key=lambda row: (
+                sum(
+                    row["topic"].count(term) * 8
+                    + row["tags"].count(term) * 4
+                    + row["summary"].count(term) * 3
+                    + row["content"].count(term)
+                    for term in terms
+                ),
+                row["updated_at"],
+            ),
+            reverse=True,
+        )[:limit]
+        return [
+            ImplementationHit(
+                topic=row["topic"],
+                summary=row["summary"],
+                content=row["content"],
+                tags=row["tags"],
+                updated_at=row["updated_at"],
+            )
+            for row in ranked
+        ]
+
+    def render_implementation_context(
+        self,
+        query: str,
+        limit: int = 2,
+        max_chars: int = 1600,
+    ) -> str:
+        hits = self.search_implementation_notes(query, limit)
+        chunks: list[str] = []
+        used = 0
+        for hit in hits:
+            header = f"[Mod实现记忆] {hit.topic}\n"
+            body = hit.summary
+            if hit.summary and not hit.content.startswith(hit.summary):
+                body += "\n" + hit.content
+            else:
+                body = hit.content
+            remaining = max_chars - used
+            if remaining <= len(header):
+                break
+            chunk = header + body[: max(0, remaining - len(header))]
+            chunks.append(chunk.rstrip())
+            used += len(chunk)
+        return "\n\n".join(chunks)
 
     def record_chat(self, room: str, role: str, text: str) -> None:
         with self._lock, self._sqlite:

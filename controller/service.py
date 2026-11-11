@@ -17,6 +17,7 @@ from .config import Settings
 from .deepseek import DeepSeekError, DeepSeekPlanner
 from .journal import CompanionJournal
 from .memory import MemoryStore
+from .mod_knowledge import IMPLEMENTATION_NOTES
 from .playbooks import PlaybookMatch, PlaybookMatcher
 from .research import CodexResearchService, ResearchError
 
@@ -110,6 +111,7 @@ class CompanionService:
             settings.memory_index_db.parent / "agent_memory.sqlite3"
         )
         self.agent_memory = AgentMemoryStore(agent_memory_db)
+        self.agent_memory.seed_implementation_notes(IMPLEMENTATION_NOTES)
         self.character_preferences = CharacterPreferenceStore(
             settings.memory_index_db.parent / "companion_character.json",
             default=settings.companion_character,

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from controller.agent_memory import AgentMemoryStore
+from controller.mod_knowledge import IMPLEMENTATION_NOTES
 
 
 class AgentMemoryTests(unittest.TestCase):
@@ -70,6 +71,32 @@ class AgentMemoryTests(unittest.TestCase):
             try:
                 memory.remember_skill("测试", "独立技能记忆")
                 memory.record_chat("chat", "user", "测试聊天")
+            finally:
+                memory.close()
+            self.assertEqual(before, list(vault.rglob("*")))
+
+    def test_project_implementation_memory_is_isolated_and_budgeted(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            before = list(vault.rglob("*"))
+            memory = AgentMemoryStore(root / "agent.sqlite3")
+            try:
+                memory.seed_implementation_notes(IMPLEMENTATION_NOTES)
+                context = memory.render_implementation_context(
+                    "微光这个mod能否自己启动控制器，选人怎么做",
+                    limit=2,
+                    max_chars=1600,
+                )
+                self.assertIn("启动桥", context)
+                self.assertLessEqual(len(context), 1600)
+                self.assertEqual(
+                    memory.render_implementation_context("帮我砍几棵树"),
+                    "",
+                )
             finally:
                 memory.close()
             self.assertEqual(before, list(vault.rglob("*")))

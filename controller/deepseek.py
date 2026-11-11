@@ -87,6 +87,15 @@ class DeepSeekPlanner:
             if self.agent_memory is not None
             else ""
         )
+        implementation_context = (
+            self.agent_memory.render_implementation_context(
+                memory_query,
+                limit=2,
+                max_chars=1600,
+            )
+            if self.agent_memory is not None
+            else ""
+        )
         active_plan = (
             self.agent_memory.active_plan()
             if self.agent_memory is not None
@@ -173,6 +182,8 @@ class DeepSeekPlanner:
                         + (memory_context or "无")
                         + "\n\n伴侣独立技能记忆（不是用户个人记忆）：\n"
                         + (skill_context or "无")
+                        + "\n\n微光项目实现记忆（不是用户个人记忆）：\n"
+                        + (implementation_context or "无")
                         + "\n\n当前多步骤计划：\n"
                         + json.dumps(
                             active_plan or {},
