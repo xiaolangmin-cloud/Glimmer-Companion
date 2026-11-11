@@ -1,0 +1,236 @@
+{
+  "schema": 1,
+  "character": "waxwell",
+  "display_name": "麦斯威尔",
+  "playbooks": [
+    {
+      "id": "maxwell.follow",
+      "task_type": "movement",
+      "priority": 60,
+      "patterns": [
+        "跟着我",
+        "跟我走",
+        "跟上我",
+        "回来跟着"
+      ],
+      "direct": true,
+      "reply": "好，我跟着你。",
+      "intent": {
+        "mode": "follow",
+        "lease_seconds": 86400,
+        "reason": "playbook_maxwell_follow"
+      }
+    },
+    {
+      "id": "maxwell.hold",
+      "task_type": "movement",
+      "priority": 70,
+      "patterns": [
+        "在这里等",
+        "原地等",
+        "别动",
+        "停在这里"
+      ],
+      "direct": true,
+      "reply": "好，我在这里等你。",
+      "intent": {
+        "mode": "hold",
+        "lease_seconds": 86400,
+        "reason": "playbook_maxwell_hold"
+      }
+    },
+    {
+      "id": "maxwell.retreat",
+      "task_type": "combat",
+      "priority": 100,
+      "patterns": [
+        "撤退",
+        "快跑",
+        "回来保护我",
+        "别追了"
+      ],
+      "exclude_patterns": [
+        "死战",
+        "不要逃"
+      ],
+      "direct": true,
+      "reply": "好，停止战斗并回到你身边。",
+      "intent": {
+        "mode": "retreat",
+        "lease_seconds": 120,
+        "reason": "playbook_maxwell_retreat"
+      }
+    },
+    {
+      "id": "maxwell.spider_silk_status",
+      "task_type": "status",
+      "priority": 130,
+      "patterns": [
+        "多少.*蜘蛛丝",
+        "蜘蛛丝.*多少",
+        "蜘蛛丝.*进度",
+        "收集了多少"
+      ],
+      "direct": true,
+      "response_kind": "inventory_status",
+      "item_prefab": "silk",
+      "display_name": "蜘蛛丝",
+      "reply_template": "背包里现在有 {count} 个{item}。"
+    },
+    {
+      "id": "maxwell.collect_spider_silk",
+      "task_type": "combat_loot",
+      "priority": 120,
+      "patterns": [
+        "蜘蛛丝",
+        "打.*蜘蛛",
+        "刷.*蜘蛛"
+      ],
+      "exclude_patterns": [
+        "多少",
+        "进度",
+        "蜘蛛女王",
+        "蜘蛛战士"
+      ],
+      "default_amount": 10,
+      "direct": true,
+      "reply": "好，我会连续击杀蜘蛛并收集 {amount} 个蜘蛛丝，完成后再回来。",
+      "intent": {
+        "mode": "collect_loot",
+        "target_prefab": "silk",
+        "lease_seconds": 1800,
+        "reason": "playbook_maxwell_spider_silk",
+        "params": {
+          "source_prefab": "spider",
+          "source_tag": "spider",
+          "amount": "$amount",
+          "give_to_player": true,
+          "ignore_player_leash": true,
+          "progress_reports": false,
+          "patrol_radius": 48,
+          "no_source_timeout": 60
+        }
+      }
+    },
+    {
+      "id": "maxwell.gather_grass_twigs",
+      "task_type": "gathering",
+      "priority": 90,
+      "patterns": [
+        "草和树枝",
+        "树枝和草",
+        "收.*草和树枝",
+        "捡.*草和树枝"
+      ],
+      "direct": true,
+      "reply": "好，我只收集附近的草和树枝。",
+      "intent": {
+        "mode": "harvest_area",
+        "lease_seconds": 600,
+        "reason": "playbook_maxwell_grass_twigs",
+        "params": {
+          "all_plants": true,
+          "radius": 32,
+          "target_prefabs": [
+            "grass",
+            "grass_tall",
+            "sapling",
+            "sapling_moon"
+          ]
+        }
+      }
+    },
+    {
+      "id": "maxwell.craft_axe",
+      "task_type": "crafting",
+      "priority": 80,
+      "patterns": [
+        "做.*斧头",
+        "制作.*斧头",
+        "造.*斧头"
+      ],
+      "require_craftable": "axe",
+      "direct": true,
+      "reply": "材料够，我现在制作斧头。",
+      "intent": {
+        "mode": "craft",
+        "lease_seconds": 120,
+        "reason": "playbook_maxwell_craft_axe",
+        "params": {
+          "recipe": "axe"
+        }
+      }
+    },
+    {
+      "id": "maxwell.spider_warrior",
+      "task_type": "combat",
+      "priority": 110,
+      "patterns": [
+        "蜘蛛战士",
+        "打.*战士蜘蛛"
+      ],
+      "direct": true,
+      "reply": "好，我去处理蜘蛛战士。",
+      "intent": {
+        "mode": "combat",
+        "target_prefab": "spider_warrior",
+        "lease_seconds": 900,
+        "reason": "playbook_maxwell_spider_warrior",
+        "params": {
+          "auto_dodge": true,
+          "retreat_on_lethal": true
+        }
+      }
+    },
+    {
+      "id": "maxwell.deerclops",
+      "task_type": "boss",
+      "priority": 105,
+      "patterns": [
+        "巨鹿",
+        "deerclops"
+      ],
+      "direct": false,
+      "strategy": "保持中距离，优先确保护甲和照明；可用暗影随从分担压力，致命伤前撤退。具体技能选择根据已激活技能和背包适配。",
+      "reply": "我查到麦斯威尔应对巨鹿的预定策略了，正在按当前装备适配。"
+    },
+    {
+      "id": "maxwell.spider_queen",
+      "task_type": "boss",
+      "priority": 105,
+      "patterns": [
+        "蜘蛛女王",
+        "spiderqueen",
+        "蜘蛛女皇"
+      ],
+      "direct": false,
+      "strategy": "先清理小蜘蛛，避免被包围；利用暗影随从吸引仇恨，保持可撤退路线，低血量按致命伤规则撤离。",
+      "reply": "我匹配到蜘蛛女王的麦斯威尔预案，正在结合当前随从和物品适配。"
+    },
+    {
+      "id": "maxwell.bee_queen",
+      "task_type": "boss",
+      "priority": 105,
+      "patterns": [
+        "蜂后",
+        "蜂王",
+        "beequeen"
+      ],
+      "direct": false,
+      "strategy": "提前准备护甲、恢复和灭火手段；用暗影随从分担蜜蜂压力，避免站桩，根据阶段调整进退。",
+      "reply": "我匹配到蜂后的麦斯威尔预案，先检查补给和技能再行动。"
+    },
+    {
+      "id": "maxwell.dragonfly",
+      "task_type": "boss",
+      "priority": 105,
+      "patterns": [
+        "龙蝇",
+        "dragonfly"
+      ],
+      "direct": false,
+      "strategy": "确认护甲和恢复充足，利用随从轮换承担伤害，严格避开高危攻击并保留撤退通道。",
+      "reply": "我匹配到龙蝇的麦斯威尔预案，先核对补给和当前技能。"
+    }
+  ]
+}
