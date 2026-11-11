@@ -27,6 +27,9 @@ local COMPANION_CHARACTER_NAMES = {
     wonkey = "猴子",
 }
 local GetBridgeURL
+local GetLauncherURL
+local TrySpawnCompanion
+local AnnounceControllerStatus
 
 local function GetCompanionCharacterPrefab(player)
     local world = GLOBAL.TheWorld
@@ -86,6 +89,125 @@ local function FetchControllerCompanionCharacter(world, player, callback)
     end)
 end
 
+local function MarkControllerReady(world, player)
+    if world == nil or world._codex_controller_connection_ready then
+        return
+    end
+    world._codex_controller_connection_ready = true
+    world._codex_controller_connection_in_progress = false
+    AnnounceControllerStatus("控制器连接成功，正在初始化微光和记忆。")
+    if player ~= nil and player:IsValid() then
+        TrySpawnCompanion(player)
+    end
+end
+
+local function WaitForControllerReady(world, player, attempt)
+    if world == nil
+        or world ~= GLOBAL.TheWorld
+        or player == nil
+        or not player:IsValid()
+    then
+        return
+    end
+    if world._codex_controller_connection_ready then
+        return
+    end
+    attempt = attempt or 1
+    if attempt > 24 then
+        world._codex_controller_connection_in_progress = false
+        AnnounceControllerStatus(
+            "控制器连接超时。请检查 state/logs/controller-auto.stderr.log。"
+        )
+        return
+    end
+    GLOBAL.TheSim:QueryServer(
+        GetLauncherURL() .. "/status",
+        function(result, success)
+            if not success or result == nil or result == "" then
+                world:DoTaskInTime(0.5, function()
+                    WaitForControllerReady(world, player, attempt + 1)
+                end)
+                return
+            end
+            local decoded = GLOBAL.json.decode(result)
+            local state = type(decoded) == "table"
+                and decoded.controller
+                or nil
+            if state == "ready" then
+                MarkControllerReady(world, player)
+            elseif state == "starting" then
+                world:DoTaskInTime(0.5, function()
+                    WaitForControllerReady(world, player, attempt + 1)
+                end)
+            else
+                world._codex_controller_connection_in_progress = false
+                AnnounceControllerStatus(
+                    "控制器未能启动。请检查启动桥日志和控制器错误日志。"
+                )
+            end
+        end,
+        "GET"
+    )
+end
+
+local function RequestControllerStart(world, player)
+    if world == nil or player == nil or not player:IsValid() then
+        return
+    end
+    if world._codex_controller_connection_ready
+        or world._codex_controller_connection_in_progress
+    then
+        return
+    end
+    world._codex_controller_connection_in_progress = true
+    AnnounceControllerStatus("已进入存档，正在请求启动本地控制器。")
+
+    GLOBAL.TheSim:QueryServer(
+        GetBridgeURL() .. "/health",
+        function(_, already_running)
+            if already_running then
+                AnnounceControllerStatus("检测到控制器已在运行，正在建立连接。")
+                MarkControllerReady(world, player)
+                return
+            end
+            GLOBAL.TheSim:QueryServer(
+                GetLauncherURL() .. "/start",
+                function(result, success)
+                    if not success or result == nil or result == "" then
+                        world._codex_controller_connection_in_progress = false
+                        AnnounceControllerStatus(
+                            "无法调用本地启动桥。请先运行一次 " ..
+                            "install_companion_bridge.cmd。"
+                        )
+                        return
+                    end
+                    local decoded = GLOBAL.json.decode(result)
+                    if type(decoded) == "table"
+                        and decoded.controller == "ready"
+                    then
+                        MarkControllerReady(world, player)
+                    elseif type(decoded) == "table"
+                        and decoded.controller == "starting"
+                    then
+                        AnnounceControllerStatus(
+                            "启动桥已接受请求，控制器正在启动并等待接口就绪。"
+                        )
+                        WaitForControllerReady(world, player, 1)
+                    else
+                        world._codex_controller_connection_in_progress = false
+                        AnnounceControllerStatus(
+                            "启动桥返回异常，完整控制器没有成功启动。"
+                        )
+                    end
+                end,
+                "POST",
+                "{}"
+            )
+        end,
+        "GET"
+    )
+end
+
 local function GetPrimaryPlayer(companion)
     local global_player = GLOBAL.ThePlayer
     if global_player ~= nil and global_player:IsValid() then
@@ -112,6 +234,21 @@ end
 
 GetBridgeURL = function()
     return GetModConfigData("bridge_url") or "http://127.0.0.1:8765"
+end
+
+GetLauncherURL = function()
+    return GetModConfigData("launcher_url") or "http://127.0.0.1:8766"
+end
+
+AnnounceControllerStatus = function(message)
+    if GLOBAL.TheNet ~= nil then
+        GLOBAL.TheNet:Announce(
+            "[微光] " .. message,
+            nil,
+            nil,
+            "default"
+        )
+    end
 end
 
 local function ExtractCompanionChat(message)
@@ -718,7 +855,7 @@ local function CaptureCompanionForMigration(player, migration_data)
     return state
 end
 
-local function TrySpawnCompanion(player)
+TrySpawnCompanion = function(player)
     if player == nil or not player:IsValid() then
         return false
     end
@@ -818,6 +955,9 @@ local function StartCompanionSupervisor(world)
                 end
                 return
             end
+            if not world._codex_controller_connection_ready then
+                return
+            end
             TrySpawnCompanion(player)
             return
         end
@@ -851,7 +991,7 @@ local function ScheduleCompanionSupervisor(world)
         world:DoTaskInTime(1, function()
             if player:IsValid() and not world._codex_companion_migrating then
                 StartCompanionSupervisor(world)
-                TrySpawnCompanion(player)
+                RequestControllerStart(world, player)
             end
         end)
     end)
@@ -925,7 +1065,8 @@ AddPlayerPostInit(function(inst)
             return
         end
         StartCompanionSupervisor(GLOBAL.TheWorld)
-        TrySpawnCompanion(inst)
+        GLOBAL.TheWorld._codex_primary_player = inst
+        RequestControllerStart(GLOBAL.TheWorld, inst)
     end
     inst:DoTaskInTime(1, SpawnWhenWorldReady)
 end)

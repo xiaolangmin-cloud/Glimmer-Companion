@@ -244,6 +244,12 @@ class LuaRuntimeContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn('"/companion-character"', modmain)
+        self.assertIn('"/start"', modmain)
+        self.assertIn('"/status"', modmain)
+        self.assertIn("RequestControllerStart", modmain)
+        self.assertIn("已进入存档，正在请求启动本地控制器", modmain)
+        self.assertIn("控制器连接成功", modmain)
+        self.assertIn("RequestControllerStart(GLOBAL.TheWorld, inst)", modmain)
         self.assertIn("world._codex_selected_character", modmain)
         self.assertIn(
             "world._codex_switch_companion_character = SwitchCompanionCharacter",

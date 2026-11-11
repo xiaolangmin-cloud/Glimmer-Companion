@@ -8,7 +8,7 @@ description = [[
 不会另行改变任务目标。
 ]]
 author = "xiaolangmin-cloud"
-version = "0.13.0"
+version = "0.14.0"
 forumthread = ""
 
 api_version = 10
@@ -60,6 +60,14 @@ configuration_options = {
             { description = "127.0.0.1:8765", data = "http://127.0.0.1:8765" },
         },
         default = "http://127.0.0.1:8765",
+    },
+    {
+        name = "launcher_url",
+        label = "Local launcher bridge",
+        options = {
+            { description = "127.0.0.1:8766", data = "http://127.0.0.1:8766" },
+        },
+        default = "http://127.0.0.1:8766",
     },
     {
         name = "area_radius",
