@@ -1,4 +1,4 @@
-# DST Codex Companion
+# 微光旅伴 / Glimmer Companion
 
 一个不使用第二个真实玩家的《饥荒联机版》AI 伴侣项目。
 
@@ -11,20 +11,20 @@
 仓库地址：
 
 ```text
-https://github.com/xiaolangmin-cloud/Codex-Companion
+https://github.com/xiaolangmin-cloud/Glimmer-Companion
 ```
 
 最新 Mod 包：
 
 ```text
-https://github.com/xiaolangmin-cloud/Codex-Companion/releases/latest
+https://github.com/xiaolangmin-cloud/Glimmer-Companion/releases/latest
 ```
 
 ## 快速开始
 
 ```powershell
-git clone https://github.com/xiaolangmin-cloud/Codex-Companion.git
-cd dst-codex-companion
+git clone https://github.com/xiaolangmin-cloud/Glimmer-Companion.git
+cd Glimmer-Companion
 ```
 
 ### 1. 环境要求
@@ -63,7 +63,7 @@ modmain.lua
 scripts/brains/codex_companion_brain.lua
 ```
 
-在游戏 Mod 设置中启用 `Codex Companion`，建议伴侣角色选择“与玩家相同”。
+在游戏 Mod 设置中启用 `微光旅伴`，建议伴侣角色选择“与玩家相同”。
 
 ### 4. 启动控制器
 

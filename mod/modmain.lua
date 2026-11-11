@@ -141,7 +141,7 @@ local function InstallInGameChatHook()
             user_vanity
         )
     end
-    print("[Codex Companion] in-game chat hook installed")
+    print("[Glimmer Companion] in-game chat hook installed")
 end
 
 local function GetShardId()
@@ -323,7 +323,7 @@ local function DecodeProfile(raw)
     end
     local chunk, err = loader("return " .. raw, "codex_companion_profile_v2")
     if chunk == nil then
-        print("[Codex Companion] failed to decode profile", err)
+        print("[Glimmer Companion] failed to decode profile", err)
         return nil
     end
     local data = chunk()
@@ -431,7 +431,7 @@ local function CreateCompanionEntity(player, record)
         companion = GLOBAL.SpawnPrefab(character_prefab)
         if companion == nil then
             print(
-                "[Codex Companion] failed to spawn configured survivor",
+                "[Glimmer Companion] failed to spawn configured survivor",
                 character_prefab
             )
             companion = GLOBAL.SpawnPrefab("wendy")
@@ -439,7 +439,7 @@ local function CreateCompanionEntity(player, record)
     end
     spawning_companion = false
     if companion == nil then
-        print("[Codex Companion] failed to spawn fallback survivor")
+        print("[Glimmer Companion] failed to spawn fallback survivor")
     end
     return companion
 end
@@ -481,7 +481,7 @@ local function FinishCompanionSpawn(
         tonumber(GetModConfigData("combat_leash_distance")) or 30
     EnsureLocomotor(companion)
     MakeServerNonSleepable(companion)
-    companion.name = "Codex"
+    companion.name = "微光"
 
     local saved_landmarks = migration_state ~= nil
         and migration_state.landmarks
@@ -512,7 +512,7 @@ local function FinishCompanionSpawn(
     end)
     SaveCompanionState(companion)
     print(
-        "[Codex Companion] spawned persistent survivor",
+        "[Glimmer Companion] spawned persistent survivor",
         companion.prefab,
         identity,
         migration_state ~= nil and "migrated" or "profile"
@@ -608,7 +608,7 @@ local function CaptureCompanionForMigration(player, migration_data)
     world._codex_companion = nil
     companion:Remove()
     print(
-        "[Codex Companion] captured migration checkpoint",
+        "[Glimmer Companion] captured migration checkpoint",
         state.from_shard,
         state.to_shard,
         state.interrupted_intent_id or "no_active_task"
@@ -635,13 +635,13 @@ end
 
 local function StartCompanionSupervisor(world)
     world = world or GLOBAL.TheWorld
-    print("[Codex Companion] supervisor startup requested")
+    print("[Glimmer Companion] supervisor startup requested")
     if world == nil or not world.ismastersim then
-        print("[Codex Companion] supervisor skipped: world not master simulation")
+        print("[Glimmer Companion] supervisor skipped: world not master simulation")
         return
     end
     if world._codex_companion_supervisor ~= nil then
-        print("[Codex Companion] supervisor already active")
+        print("[Glimmer Companion] supervisor already active")
         return
     end
     local reported_waiting = false
@@ -655,7 +655,7 @@ local function StartCompanionSupervisor(world)
             if player == nil then
                 if not reported_waiting then
                     reported_waiting = true
-                    print("[Codex Companion] supervisor waiting for primary player")
+                    print("[Glimmer Companion] supervisor waiting for primary player")
                 end
                 return
             end
@@ -665,7 +665,7 @@ local function StartCompanionSupervisor(world)
         MakeServerNonSleepable(companion)
         EnsureLocomotor(companion)
     end)
-    print("[Codex Companion] supervisor active")
+    print("[Glimmer Companion] supervisor active")
 end
 
 local function ScheduleCompanionSupervisor(world)
@@ -687,7 +687,7 @@ local function ScheduleCompanionSupervisor(world)
             return
         end
         world._codex_primary_player = player
-        print("[Codex Companion] primary player joined", player.prefab)
+        print("[Glimmer Companion] primary player joined", player.prefab)
         world:DoTaskInTime(1, function()
             if player:IsValid() and not world._codex_companion_migrating then
                 StartCompanionSupervisor(world)
@@ -716,7 +716,7 @@ AddSimPostInit(function()
         GLOBAL.TheWorld._codex_companion_sim_hook = true
     end
     print(
-        "[Codex Companion] SimPostInit",
+        "[Glimmer Companion] SimPostInit",
         tostring(GLOBAL.TheWorld ~= nil),
         tostring(GLOBAL.TheWorld ~= nil and GLOBAL.TheWorld.ismastersim)
     )

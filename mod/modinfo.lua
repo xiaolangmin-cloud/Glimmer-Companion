@@ -1,4 +1,4 @@
-name = "Codex Companion"
+name = "微光旅伴"
 description = [[
 由本地 DeepSeek 控制器实时驱动的非玩家幸存者。
 
@@ -6,7 +6,7 @@ description = [[
 伴侣拥有独立的服务端模拟区域，远距离任务不会因玩家离开而停摆。
 执行层只执行控制器意图，不运行独立的逃跑或进食 AI。
 ]]
-author = "Codex"
+author = "xiaolangmin-cloud"
 version = "0.10.4"
 forumthread = ""
 

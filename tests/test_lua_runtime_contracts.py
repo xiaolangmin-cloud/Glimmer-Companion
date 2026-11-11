@@ -34,6 +34,7 @@ class LuaRuntimeContractTests(unittest.TestCase):
     def test_actual_survivor_character_is_configurable(self) -> None:
         modinfo = (ROOT / "mod" / "modinfo.lua").read_text(encoding="utf-8")
 
+        self.assertIn('name = "微光旅伴"', modinfo)
         self.assertIn('name = "companion_character"', modinfo)
         self.assertIn('name = "combat_leash_distance"', modinfo)
         self.assertIn('data = "wendy"', modinfo)

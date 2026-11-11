@@ -1,1 +1,1 @@
-"""DeepSeek-controlled companion controller for Don't Starve Together."""
+"""Glimmer Companion controller for Don't Starve Together."""
