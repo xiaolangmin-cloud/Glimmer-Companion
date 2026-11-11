@@ -30,6 +30,21 @@ class CharacterPreferenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.select("not_a_character")
 
+    def test_selector_launcher_uses_checked_script_file(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        launcher = (root / "open_character_selector.cmd").read_text(
+            encoding="utf-8"
+        )
+        script = (root / "open_character_selector.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("open_character_selector.ps1", launcher)
+        self.assertIn("if errorlevel 1 pause", launcher)
+        self.assertIn("/health", script)
+        self.assertIn("/character", script)
+        self.assertIn("MessageBox", script)
+
 
 if __name__ == "__main__":
     unittest.main()
