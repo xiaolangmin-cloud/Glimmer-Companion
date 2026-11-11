@@ -73,6 +73,8 @@ class CharacterPreferenceTests(unittest.TestCase):
         self.assertIn("Stop-Bridge", launcher)
         self.assertIn("Don't Starve Together - 微光.lnk", installer)
         self.assertIn("Don't Starve Together - 微光.lnk", uninstaller)
+        self.assertIn("Find-DstExecutable", installer)
+        self.assertIn("$shortcut.IconLocation", installer)
 
 
 if __name__ == "__main__":
