@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .characters import render_character_selector
 from .config import Settings
 from .service import CompanionService
 
@@ -33,9 +34,31 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(self, status: int, html: str) -> None:
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self) -> None:
         if self.path == "/health":
             self._send_json(200, {"ok": True, "state": self.server.service.state()})
+            return
+        if self.path == "/character":
+            self._send_html(
+                200,
+                render_character_selector(
+                    self.server.service.character_selection()
+                ),
+            )
+            return
+        if self.path == "/companion-character":
+            self._send_json(
+                200,
+                self.server.service.character_selection(),
+            )
             return
         if self.path == "/command":
             self._send_json(200, self.server.service.state())
@@ -97,6 +120,13 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if self.path == "/command":
                 state = self.server.service.force_command(payload)
                 self._send_json(200, state)
+                return
+            if self.path == "/companion-character":
+                prefab = payload.get("prefab")
+                if not isinstance(prefab, str):
+                    raise ValueError("prefab is required")
+                selection = self.server.service.select_character(prefab)
+                self._send_json(200, selection)
                 return
             self._send_json(404, {"error": "not_found"})
         except (ValueError, json.JSONDecodeError) as exc:

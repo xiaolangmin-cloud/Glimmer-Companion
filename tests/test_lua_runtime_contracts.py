@@ -38,7 +38,7 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn('name = "companion_character"', modinfo)
         self.assertIn('name = "combat_leash_distance"', modinfo)
         self.assertIn('data = "wendy"', modinfo)
-        self.assertIn('default = "player"', modinfo)
+        self.assertIn('default = "waxwell"', modinfo)
 
     def test_shard_transition_uses_one_full_companion_record(self) -> None:
         source = (ROOT / "mod" / "modmain.lua").read_text(encoding="utf-8")
@@ -236,6 +236,27 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn('"recovery_completed"', source)
         self.assertIn('"recovery_unavailable"', source)
         self.assertIn("fail_on_stuck = false", source)
+
+    def test_runtime_character_selection_is_server_side_and_safe(self) -> None:
+        modmain = (ROOT / "mod" / "modmain.lua").read_text(encoding="utf-8")
+        brain = (
+            ROOT / "mod" / "scripts" / "brains" / "codex_companion_brain.lua"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('"/companion-character"', modmain)
+        self.assertIn("world._codex_selected_character", modmain)
+        self.assertIn(
+            "world._codex_switch_companion_character = SwitchCompanionCharacter",
+            modmain,
+        )
+        self.assertIn("companion.components.inventory:DropEverything()", modmain)
+        self.assertIn('world._codex_pending_character_switch = true', modmain)
+        self.assertIn('"[微光] 已切换为" .. display_name', modmain)
+        self.assertIn("state.companion_character", brain)
+        self.assertIn(
+            "TheWorld._codex_switch_companion_character(",
+            brain,
+        )
 
 
 if __name__ == "__main__":

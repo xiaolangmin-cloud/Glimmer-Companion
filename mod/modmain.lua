@@ -4,9 +4,41 @@ GLOBAL._codex_companion_chat_hook_installed = false
 local recent_chat_posts = {}
 local tonumber = GLOBAL.tonumber
 local next = GLOBAL.next
+local COMPANION_CHARACTER_NAMES = {
+    player = "玩家当前角色",
+    waxwell = "麦斯威尔",
+    walter = "沃尔特",
+    wendy = "温蒂",
+    wilson = "威尔逊",
+    willow = "薇洛",
+    wolfgang = "沃尔夫冈",
+    wx78 = "WX-78",
+    wickerbottom = "薇克巴顿",
+    woodie = "伍迪",
+    wes = "韦斯",
+    wathgrithr = "薇格弗德",
+    webber = "韦伯",
+    warly = "沃利",
+    wormwood = "沃姆伍德",
+    winona = "薇诺娜",
+    wortox = "沃拓克斯",
+    wurt = "沃特",
+    wanda = "旺达",
+    wonkey = "猴子",
+}
+local GetBridgeURL
 
 local function GetCompanionCharacterPrefab(player)
-    local configured = GetModConfigData("companion_character") or "player"
+    local world = GLOBAL.TheWorld
+    local configured = world ~= nil
+        and world._codex_selected_character
+        or nil
+    configured = configured
+        or GetModConfigData("companion_character")
+        or "player"
+    if COMPANION_CHARACTER_NAMES[configured] == nil then
+        configured = "player"
+    end
     if configured == "player" then
         if player ~= nil and player.prefab ~= nil and player.prefab ~= "" then
             return player.prefab
@@ -14,6 +46,44 @@ local function GetCompanionCharacterPrefab(player)
         return "wendy"
     end
     return configured
+end
+
+local function FetchControllerCompanionCharacter(world, player, callback)
+    if world == nil or player == nil or not player:IsValid() then
+        callback(nil)
+        return
+    end
+    local finished = false
+    local function finish(prefab)
+        if finished then
+            return
+        end
+        finished = true
+        callback(prefab)
+    end
+    GLOBAL.TheSim:QueryServer(
+        GetBridgeURL() .. "/companion-character",
+        function(result, success)
+            if not success or result == nil or result == "" then
+                finish(nil)
+                return
+            end
+            local decoded = GLOBAL.json.decode(result)
+            local prefab = type(decoded) == "table"
+                and decoded.prefab
+                or nil
+            finish(
+                type(prefab) == "string"
+                    and COMPANION_CHARACTER_NAMES[prefab] ~= nil
+                    and prefab
+                    or nil
+            )
+        end,
+        "GET"
+    )
+    world:DoTaskInTime(1, function()
+        finish(nil)
+    end)
 end
 
 local function GetPrimaryPlayer(companion)
@@ -40,7 +110,7 @@ local function GetPrimaryPlayer(companion)
     return nil
 end
 
-local function GetBridgeURL()
+GetBridgeURL = function()
     return GetModConfigData("bridge_url") or "http://127.0.0.1:8765"
 end
 
@@ -454,6 +524,16 @@ local function FinishCompanionSpawn(
     local record = migration_state ~= nil
         and migration_state.record
         or profile ~= nil and profile.record or nil
+    if record ~= nil
+        and migration_state == nil
+        and GLOBAL.TheWorld ~= nil
+        and GLOBAL.TheWorld._codex_selected_character ~= nil
+    then
+        local desired_prefab = GetCompanionCharacterPrefab(player)
+        if record.prefab ~= nil and record.prefab ~= desired_prefab then
+            record = nil
+        end
+    end
     local companion = CreateCompanionEntity(player, record)
     if companion == nil then
         if GLOBAL.TheWorld ~= nil then
@@ -512,6 +592,22 @@ local function FinishCompanionSpawn(
         end
     end)
     SaveCompanionState(companion)
+    if GLOBAL.TheWorld ~= nil
+        and GLOBAL.TheWorld._codex_pending_character_switch
+    then
+        local selected = GetCompanionCharacterPrefab(player)
+        local display_name = COMPANION_CHARACTER_NAMES[selected]
+            or selected
+        GLOBAL.TheWorld._codex_pending_character_switch = nil
+        if GLOBAL.TheNet ~= nil then
+            GLOBAL.TheNet:Announce(
+                "[微光] 已切换为" .. display_name,
+                nil,
+                nil,
+                "default"
+            )
+        end
+    end
     print(
         "[Glimmer Companion] spawned persistent survivor",
         companion.prefab,
@@ -543,26 +639,31 @@ local function SpawnCompanion(player, migration_state)
     end
 
     world._codex_companion_spawning = true
-    GLOBAL.TheSim:GetPersistentString(GetProfileStateFile(), function(success, raw)
-        if not player:IsValid() or world ~= GLOBAL.TheWorld then
-            if world ~= nil then
-                world._codex_companion_spawning = false
-            end
-            return
+    FetchControllerCompanionCharacter(world, player, function(selected)
+        if selected ~= nil then
+            world._codex_selected_character = selected
         end
-        local profile = success and DecodeProfile(raw) or nil
-        if profile ~= nil then
-            FinishCompanionSpawn(player, profile, nil, nil)
-            return
-        end
-        LoadLegacyCompanionState(function(legacy_state)
+        GLOBAL.TheSim:GetPersistentString(GetProfileStateFile(), function(success, raw)
             if not player:IsValid() or world ~= GLOBAL.TheWorld then
                 if world ~= nil then
                     world._codex_companion_spawning = false
                 end
                 return
             end
-            FinishCompanionSpawn(player, nil, nil, legacy_state)
+            local profile = success and DecodeProfile(raw) or nil
+            if profile ~= nil then
+                FinishCompanionSpawn(player, profile, nil, nil)
+                return
+            end
+            LoadLegacyCompanionState(function(legacy_state)
+                if not player:IsValid() or world ~= GLOBAL.TheWorld then
+                    if world ~= nil then
+                        world._codex_companion_spawning = false
+                    end
+                    return
+                end
+                FinishCompanionSpawn(player, nil, nil, legacy_state)
+            end)
         end)
     end)
     return true
@@ -634,6 +735,63 @@ local function TrySpawnCompanion(player)
     return spawned
 end
 
+local function SwitchCompanionCharacter(requested_prefab)
+    local world = GLOBAL.TheWorld
+    if world == nil or not world.ismastersim then
+        return false, "not_server"
+    end
+    if type(requested_prefab) ~= "string"
+        or COMPANION_CHARACTER_NAMES[requested_prefab] == nil
+    then
+        return false, "invalid_character"
+    end
+    local player = GetPrimaryPlayer(nil)
+    local desired_prefab = requested_prefab == "player"
+        and player ~= nil
+        and player.prefab
+        or requested_prefab
+    if desired_prefab == nil or desired_prefab == "" then
+        return false, "player_missing"
+    end
+
+    world._codex_selected_character = requested_prefab
+    local companion = FindCompanion(world)
+    if companion == nil or not companion:IsValid() then
+        return true, "spawn_pending"
+    end
+    if companion.prefab == desired_prefab then
+        return true, "unchanged"
+    end
+
+    if companion.brain ~= nil
+        and type(companion.brain.StopAll) == "function"
+    then
+        companion.brain:StopAll()
+    end
+    if companion.components.inventory ~= nil then
+        companion.components.inventory:DropEverything()
+    end
+    companion._codex_skip_state_save = true
+    world._codex_companion = nil
+    world._codex_companion_spawning = false
+    world._codex_pending_character_switch = true
+    companion:Remove()
+    GLOBAL.TheSim:SetPersistentString(
+        GetProfileStateFile(),
+        "",
+        false
+    )
+    if GLOBAL.TheNet ~= nil then
+        GLOBAL.TheNet:Announce(
+            "[微光] 正在切换角色，原背包物品已放在脚下。",
+            nil,
+            nil,
+            "default"
+        )
+    end
+    return true, "switching"
+end
+
 local function StartCompanionSupervisor(world)
     world = world or GLOBAL.TheWorld
     print("[Glimmer Companion] supervisor startup requested")
@@ -674,6 +832,7 @@ local function ScheduleCompanionSupervisor(world)
         return
     end
     world._codex_companion_world_hook = true
+    world._codex_switch_companion_character = SwitchCompanionCharacter
     world:ListenForEvent("ms_playerdespawnandmigrate", function(_, data)
         if data == nil or data.player == nil then
             return

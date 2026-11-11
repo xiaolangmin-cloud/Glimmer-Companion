@@ -48,6 +48,28 @@ class ServerTests(unittest.TestCase):
                 with urlopen(base + "/gaps", timeout=2) as response:
                     gaps = json.loads(response.read())
                 self.assertEqual(gaps["gaps"], [])
+                with urlopen(base + "/character", timeout=2) as response:
+                    page = response.read().decode("utf-8")
+                self.assertIn("微光旅伴", page)
+                with urlopen(
+                    base + "/companion-character",
+                    timeout=2,
+                ) as response:
+                    character = json.loads(response.read())
+                self.assertEqual(character["prefab"], "waxwell")
+
+                character_payload = json.dumps({"prefab": "walter"}).encode(
+                    "utf-8"
+                )
+                request = Request(
+                    base + "/companion-character",
+                    data=character_payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=2) as response:
+                    selected = json.loads(response.read())
+                self.assertEqual(selected["prefab"], "walter")
 
                 payload = json.dumps(
                     {"companion": {}, "world": {}, "nearby": [], "events": []}
@@ -62,6 +84,7 @@ class ServerTests(unittest.TestCase):
                     tick = json.loads(response.read())
                 self.assertEqual(tick["intent"]["mode"], "follow")
                 self.assertEqual(tick["observed_revision"], 1)
+                self.assertEqual(tick["companion_character"], "walter")
 
                 message = json.dumps({"text": "跟着我"}).encode("utf-8")
                 request = Request(

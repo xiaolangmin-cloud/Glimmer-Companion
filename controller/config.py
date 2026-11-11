@@ -26,6 +26,7 @@ class Settings:
     default_lease_seconds: float
     agent_memory_db: Path | None = None
     playbook_dir: Path | None = None
+    companion_character: str = "waxwell"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -84,5 +85,9 @@ class Settings:
                     "CODEX_COMPANION_PLAYBOOKS",
                     str(PROJECT_ROOT / "config" / "playbooks"),
                 )
+            ),
+            companion_character=os.getenv(
+                "CODEX_COMPANION_CHARACTER",
+                "waxwell",
             ),
         )

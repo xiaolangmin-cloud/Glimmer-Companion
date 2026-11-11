@@ -8,7 +8,7 @@ description = [[
 不会另行改变任务目标。
 ]]
 author = "xiaolangmin-cloud"
-version = "0.11.2"
+version = "0.12.0"
 forumthread = ""
 
 api_version = 10
@@ -30,7 +30,7 @@ configuration_options = {
         name = "companion_character",
         label = "Companion character",
         options = {
-            { description = "Same as player (recommended)", data = "player" },
+            { description = "Same as player", data = "player" },
             { description = "Wendy", data = "wendy" },
             { description = "Wilson", data = "wilson" },
             { description = "Willow", data = "willow" },
@@ -39,7 +39,7 @@ configuration_options = {
             { description = "Wickerbottom", data = "wickerbottom" },
             { description = "Woodie", data = "woodie" },
             { description = "Wes", data = "wes" },
-            { description = "Maxwell", data = "waxwell" },
+            { description = "Maxwell (recommended)", data = "waxwell" },
             { description = "Wigfrid", data = "wathgrithr" },
             { description = "Webber", data = "webber" },
             { description = "Warly", data = "warly" },
@@ -51,7 +51,7 @@ configuration_options = {
             { description = "Wanda", data = "wanda" },
             { description = "Wonkey", data = "wonkey" },
         },
-        default = "player",
+        default = "waxwell",
     },
     {
         name = "bridge_url",

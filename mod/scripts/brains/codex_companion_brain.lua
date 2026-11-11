@@ -295,6 +295,7 @@ local CodexCompanionBrain = Class(Brain, function(self, inst)
     self.recovery_state = nil
     self.recovery_next_check = 0
     self.recovery_notice_at = {}
+    self.requested_companion_character = nil
 end)
 
 function CodexCompanionBrain:EnsureAwake()
@@ -731,6 +732,26 @@ function CodexCompanionBrain:OnBridgeResponse(result, success, http_code, sent_e
         return
     end
     local state = json.decode(result)
+    local selected_character = type(state) == "table"
+        and state.companion_character
+        or nil
+    if type(selected_character) == "string"
+        and selected_character ~= ""
+        and selected_character ~= self.requested_companion_character
+    then
+        self.requested_companion_character = selected_character
+        local inst = self.inst
+        inst:DoTaskInTime(0, function()
+            if inst:IsValid()
+                and type(TheWorld._codex_switch_companion_character)
+                    == "function"
+            then
+                TheWorld._codex_switch_companion_character(
+                    selected_character
+                )
+            end
+        end)
+    end
     if type(state) == "table" and type(state.intent) == "table" then
         if tostring(state.intent.intent_id) == tostring(self.suppressed_intent_id) then
             self.intent = nil

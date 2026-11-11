@@ -7,6 +7,17 @@ DeepSeek 默认不参与逐帧控制，只在用户指令或任务完成、失�
 不需要前缀；DeepSeek 根据内容判断是任务指令还是普通对话。表情、系统公告和
 非玩家文字事件不会进入控制器。
 
+控制器同时提供本机角色选择页：
+
+```text
+GET /character
+GET /companion-character
+POST /companion-character  {"prefab":"waxwell"}
+```
+
+选择保存在控制器独立状态中，并随每次 `/tick` 返回 `companion_character`。游戏内
+执行器检测到角色变化时中断旧任务、丢下旧微光的背包与装备，再按新角色重新生成。
+
 伴侣回复通过游戏内对话气泡显示。控制器终端只显示日志和回复，不再接受键盘输入。
 
 用户自然语言指令发送到：

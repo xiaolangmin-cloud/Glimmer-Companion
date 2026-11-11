@@ -12,6 +12,7 @@ from typing import Any
 
 from .agent_memory import AgentMemoryStore
 from .arbiter import IntentArbiter
+from .characters import CharacterPreferenceStore
 from .config import Settings
 from .deepseek import DeepSeekError, DeepSeekPlanner
 from .journal import CompanionJournal
@@ -109,6 +110,10 @@ class CompanionService:
             settings.memory_index_db.parent / "agent_memory.sqlite3"
         )
         self.agent_memory = AgentMemoryStore(agent_memory_db)
+        self.character_preferences = CharacterPreferenceStore(
+            settings.memory_index_db.parent / "companion_character.json",
+            default=settings.companion_character,
+        )
         self.journal = CompanionJournal(settings.memory_index_db.parent / "logs")
         self.research = CodexResearchService(
             Path(__file__).resolve().parent.parent,
@@ -239,6 +244,9 @@ class CompanionService:
         state["observed_revision"] = revision
         state["last_error"] = self._last_error
         state["log_path"] = str(self.journal.latest_path)
+        character_selection = self.character_selection()
+        state["companion_character"] = character_selection["prefab"]
+        state["character_selection"] = character_selection
         return state
 
     def _remember_world_snapshot(self, snapshot: dict[str, Any]) -> None:
@@ -399,6 +407,7 @@ class CompanionService:
 
     def state(self) -> dict[str, Any]:
         result = self.arbiter.snapshot()
+        character_selection = self.character_selection()
         result.update(
             {
                 "messages": list(self._messages),
@@ -406,9 +415,30 @@ class CompanionService:
                 "last_decision_at": self._last_decision_at,
                 "observed_revision": self._latest_revision,
                 "log_path": str(self.journal.latest_path),
+                "companion_character": character_selection["prefab"],
+                "character_selection": character_selection,
             }
         )
         return result
+
+    def character_selection(self) -> dict[str, Any]:
+        companion = self._latest.get("companion") or {}
+        active_prefab = (
+            str(companion.get("prefab"))
+            if companion.get("prefab")
+            else None
+        )
+        return self.character_preferences.payload(active_prefab)
+
+    def select_character(self, prefab: str) -> dict[str, Any]:
+        self.character_preferences.select(prefab)
+        selection = self.character_selection()
+        self.journal.record(
+            "config.companion_character",
+            f"微光角色选择已更新为 {selection['name']}",
+            data={"prefab": selection["prefab"]},
+        )
+        return selection
 
     @staticmethod
     def _event_signature(event: dict[str, Any]) -> str:
