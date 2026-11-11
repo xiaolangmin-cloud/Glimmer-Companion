@@ -629,6 +629,37 @@ local function PlaceCompanionNearPlayer(companion, player)
     end
 end
 
+local function PlayCompanionSpawnEffect(companion)
+    if companion == nil or not companion:IsValid() then
+        return
+    end
+    if companion.AnimState ~= nil then
+        companion.AnimState:SetMultColour(0, 0, 0, 1)
+    end
+    companion:Hide()
+    local fx = GLOBAL.SpawnPrefab("spawn_fx_medium_static")
+    if fx ~= nil then
+        fx.entity:SetParent(companion.entity)
+        fx.Transform:SetPosition(0, 0, 0)
+    end
+    companion:DoTaskInTime(6 / 30, function()
+        if not companion:IsValid() then
+            return
+        end
+        companion:Show()
+        if companion.components.colourtweener ~= nil then
+            companion.components.colourtweener:StartTween(
+                { 1, 1, 1, 1 },
+                19 / 30,
+                nil,
+                true
+            )
+        elseif companion.AnimState ~= nil then
+            companion.AnimState:SetMultColour(1, 1, 1, 1)
+        end
+    end)
+end
+
 local function CreateCompanionEntity(player, record)
     spawning_companion = true
     local companion = record ~= nil
@@ -709,9 +740,13 @@ local function FinishCompanionSpawn(
         and saved_landmarks
         or {}
 
-    if migration_state ~= nil or record == nil then
+    if migration_state ~= nil
+        or record == nil
+        or GLOBAL.TheWorld._codex_controller_connection_ready
+    then
         PlaceCompanionNearPlayer(companion, player)
     end
+    PlayCompanionSpawnEffect(companion)
     if legacy_state ~= nil then
         ApplyLegacyCompanionState(companion, legacy_state)
     end

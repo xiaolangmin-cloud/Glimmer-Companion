@@ -1,10 +1,12 @@
 $ErrorActionPreference = "Stop"
-$projectRoot = $PSScriptRoot
-$startup = [Environment]::GetFolderPath("Startup")
-$shortcutPath = Join-Path $startup "Glimmer Companion Bridge.lnk"
-$bridgePidPath = Join-Path $projectRoot "state\companion_bridge.pid"
+$desktop = [Environment]::GetFolderPath("Desktop")
+$shortcutPath = Join-Path $desktop "Don't Starve Together - 微光.lnk"
+$bridgePidPath = Join-Path $PSScriptRoot "state\companion_bridge.pid"
 $bridgeBase = "http://127.0.0.1:8766"
 
+if (Test-Path -LiteralPath $shortcutPath) {
+    Remove-Item -LiteralPath $shortcutPath -Force
+}
 try {
     Invoke-RestMethod `
         -Uri ($bridgeBase + "/stop") `
@@ -13,10 +15,6 @@ try {
         -Body "{}" `
         -TimeoutSec 3 | Out-Null
 } catch {
-}
-
-if (Test-Path -LiteralPath $shortcutPath) {
-    Remove-Item -LiteralPath $shortcutPath -Force
 }
 if (Test-Path -LiteralPath $bridgePidPath) {
     try {
@@ -30,4 +28,4 @@ if (Test-Path -LiteralPath $bridgePidPath) {
     Remove-Item -LiteralPath $bridgePidPath -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "已移除微光启动桥。"
+Write-Host "已移除微光游戏启动快捷方式。"

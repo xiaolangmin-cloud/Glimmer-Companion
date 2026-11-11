@@ -256,6 +256,8 @@ def main() -> None:
     server = BridgeHTTPServer((BRIDGE_HOST, BRIDGE_PORT))
     try:
         server.serve_forever(poll_interval=0.25)
+    except KeyboardInterrupt:
+        pass
     finally:
         server.server_close()
         try:

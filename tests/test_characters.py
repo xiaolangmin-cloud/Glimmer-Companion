@@ -52,10 +52,13 @@ class CharacterPreferenceTests(unittest.TestCase):
         bridge = (root / "controller" / "launcher_bridge.py").read_text(
             encoding="utf-8"
         )
-        installer = (root / "install_companion_bridge.ps1").read_text(
+        launcher = (root / "play_with_companion.ps1").read_text(
             encoding="utf-8"
         )
-        uninstaller = (root / "uninstall_companion_bridge.ps1").read_text(
+        installer = (root / "install_game_launcher.ps1").read_text(
+            encoding="utf-8"
+        )
+        uninstaller = (root / "uninstall_game_launcher.ps1").read_text(
             encoding="utf-8"
         )
 
@@ -65,8 +68,11 @@ class CharacterPreferenceTests(unittest.TestCase):
         self.assertIn('"/start"', bridge)
         self.assertIn('"/status"', bridge)
         self.assertIn('"controller.main"', bridge)
-        self.assertIn("Glimmer Companion Bridge.lnk", installer)
-        self.assertIn("Glimmer Companion Bridge.lnk", uninstaller)
+        self.assertIn("controller.launcher_bridge", launcher)
+        self.assertIn("steam://rungameid/322330", launcher)
+        self.assertIn("Stop-Bridge", launcher)
+        self.assertIn("Don't Starve Together - 微光.lnk", installer)
+        self.assertIn("Don't Starve Together - 微光.lnk", uninstaller)
 
 
 if __name__ == "__main__":

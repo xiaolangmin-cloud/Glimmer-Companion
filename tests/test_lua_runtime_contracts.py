@@ -251,6 +251,9 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn("控制器连接成功", modmain)
         self.assertIn("RequestControllerStart(GLOBAL.TheWorld, inst)", modmain)
         self.assertIn("world._codex_selected_character", modmain)
+        self.assertIn('GLOBAL.SpawnPrefab("spawn_fx_medium_static")', modmain)
+        self.assertIn("PlayCompanionSpawnEffect(companion)", modmain)
+        self.assertIn("companion.components.colourtweener:StartTween", modmain)
         self.assertIn(
             "world._codex_switch_companion_character = SwitchCompanionCharacter",
             modmain,
