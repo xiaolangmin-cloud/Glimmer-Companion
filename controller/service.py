@@ -101,82 +101,82 @@ EMERGENCY_ACTION_TEXT = {
 
 EMERGENCY_DETECTED_LINES = {
     "lethal_threat": (
-        "呜哇，这一下会把我拍扁！我先溜到你身边！",
-        "不行不行，再挨一下就倒啦，我先撤！",
-        "这次真的疼！我先回你身边缓一缓！",
-        "警报拉满，我先保命，马上贴过来！",
+        "呜哇，这一下会把我拍扁！",
+        "不行不行，再挨一下就倒啦！",
+        "这次真的超级危险！",
+        "保命警报拉满！",
     ),
     "earthquake": (
-        "地震啦地震啦，我先穿好护甲贴过去！",
-        "地在晃，石头要掉啦！快让我挨着你！",
-        "轰隆隆的，我先停下躲一躲！",
-        "别站在石头下面呀，微光马上过来！",
+        "地震啦地震啦！",
+        "地在晃，石头要掉啦！",
+        "轰隆隆的，地面在摇！",
+        "地底晃得站不稳！",
     ),
     "hound_wave": (
-        "来狗啦来狗啦！我先把近处的坏家伙赶走！",
-        "汪汪军团到门口啦，你先别跑太远！",
-        "好多牙好多尾巴！我贴着你打，不追远！",
-        "猎犬开饭时间到了……骗你的，我先上！",
+        "来狗啦来狗啦！",
+        "汪汪军团到门口啦！",
+        "外面好多狗牙和尾巴！",
+        "猎犬扑过来啦！",
     ),
     "frog_rain": (
-        "天上下青蛙啦，好离谱！我先拍走近处的！",
-        "呱呱军团落下来啦，你别被围住呀！",
-        "青蛙雨来啦！我今天可没带伞，先打！",
-        "满地都在蹦！我守着你身边这一圈！",
+        "天上下青蛙啦，好离谱！",
+        "呱呱军团落下来啦！",
+        "青蛙雨来啦！",
+        "满地都在蹦！",
     ),
     "nightmare_riot": (
-        "影子开始闹腾啦，我先赶走近处的！",
-        "暗处有东西在盯着我们……我先挡着！",
-        "梦魇暴乱啦，别离我太远呀！",
-        "坏影子冒出来啦，微光先把它们戳回去！",
+        "影子开始闹腾啦！",
+        "暗处有东西在盯着我们……",
+        "梦魇暴乱啦！",
+        "坏影子冒出来啦！",
     ),
     "attacked": (
-        "有人偷袭！我先还手，你别慌！",
-        "哎哟，谁打我！我先把这家伙赶走！",
-        "挨了一下！我先处理眼前这个坏家伙！",
-        "偷袭警报！微光要凶一下了！",
+        "有人偷袭！",
+        "哎哟，谁打我！",
+        "挨了一下！",
+        "偷袭警报！",
     ),
     "hostile_group": (
-        "前面聚了一群坏家伙，我先挡在你前面！",
-        "好多不友善的家伙！我先处理近处的！",
-        "它们凑过来了，我守着你身边这一圈！",
-        "坏家伙组团啦，我可不会让它们欺负你！",
+        "前面聚了一群坏家伙！",
+        "好多不友善的家伙！",
+        "它们凑过来了！",
+        "坏家伙组团啦！",
     ),
     "quake_warning": (
-        "好像要地震啦，我先穿甲，马上靠过去！",
-        "地下传来轰隆声……你站到空一点的地方呀！",
-        "石头预警！微光先做好准备！",
+        "好像要地震啦！",
+        "地下传来轰隆声……",
+        "石头掉落的预警来啦！",
         "地底在咕噜咕噜响，我有种不好的预感！",
     ),
     "hound_warning": (
-        "听见狗叫啦，我先穿甲，马上贴过来！",
-        "好像要来狗啦，你别走太远呀！",
-        "远处有爪子挠地声……我先准备一下！",
-        "狗牙警报！微光先靠到你身边！",
+        "听见狗叫啦！",
+        "好像要来狗啦！",
+        "远处有爪子挠地声……",
+        "狗牙警报！",
     ),
     "acid_rain": (
-        "酸雨酸雨！我先找防护，别让衣服化掉！",
-        "天上下酸水啦，快跟我找地方躲！",
-        "嘶……地面都在冒烟，我先换防护装备！",
-        "酸雨来啦！微光先看有没有雨具！",
+        "酸雨酸雨！",
+        "天上下酸水啦！",
+        "嘶……地面都在冒烟！",
+        "酸雨来啦！",
     ),
     "darkness": (
-        "诶？周围突然变黑啦，我先点亮火把！",
-        "伸手不见五指啦，等我亮起来！",
-        "查理的黑暗来啦？我先找光，别乱跑！",
-        "看不见路啦，微光去把灯点上！",
+        "诶？周围突然变黑啦！",
+        "伸手不见五指啦！",
+        "查理的黑暗来啦？",
+        "看不见路啦！",
     ),
     "freezing": (
-        "冷得牙都在打架啦，我先换保暖装备！",
-        "要冻成冰棍啦！我先找件厚衣服！",
-        "呼……好冷好冷，我往你那边靠一靠！",
-        "手指都不听使唤啦，我先保暖！",
+        "冷得牙都在打架啦！",
+        "要冻成冰棍啦！",
+        "呼……好冷好冷！",
+        "手指都不听使唤啦！",
     ),
     "overheating": (
-        "热得快要冒烟啦，我先换降温装备！",
+        "热得快要冒烟啦！",
         "太阳好凶！再晒下去要熟啦！",
-        "脑袋晕乎乎的……我先躲一躲热气！",
-        "好烫好烫，微光要先降温！",
+        "脑袋晕乎乎的……",
+        "好烫好烫！",
     ),
 }
 
@@ -421,6 +421,7 @@ class CompanionService:
         self._agent_memory_closed = False
         self._world_memory_last_scan = 0.0
         self._emergency_line_counts: dict[tuple[str, str, str], int] = {}
+        self._last_world_session_id: str | None = None
 
     def start(self) -> None:
         if self._thread is not None:
@@ -466,10 +467,38 @@ class CompanionService:
 
     def tick(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         self._remember_world_snapshot(snapshot)
+        session_id = str((snapshot.get("world") or {}).get("session_id") or "")
         with self._lock:
             self._latest = copy.deepcopy(snapshot)
             self._latest_revision += 1
             revision = self._latest_revision
+            if (
+                session_id
+                and self._last_world_session_id
+                and session_id != self._last_world_session_id
+            ):
+                previous = self.arbiter.active()
+                current = self.arbiter.set(
+                    {
+                        "intent_id": f"session-follow-{uuid.uuid4()}",
+                        "mode": "follow",
+                        "lease_seconds": 24 * 60 * 60,
+                        "reason": "session_started_follow",
+                    },
+                    source="session_boundary",
+                )
+                self._record_intent_change(
+                    previous,
+                    current,
+                    "session_boundary",
+                )
+                self.journal.record(
+                    "session.boundary",
+                    "检测到新游戏会话，旧任务已清除并切回跟随",
+                    data={"session_id": session_id},
+                )
+            if session_id:
+                self._last_world_session_id = session_id
             important_events = [
                 event
                 for event in (snapshot.get("events") or [])
@@ -857,20 +886,19 @@ class CompanionService:
         count = self._emergency_line_counts.get(count_key, 0)
         self._emergency_line_counts[count_key] = count + 1
         text = lines[count % len(lines)]
-        if kind == "detected" and action == "continue_task_override":
-            override_lines = EMERGENCY_ACTION_LINES[
-                "continue_task_override"
-            ]
-            override_key = ("override", category, action)
-            override_count = self._emergency_line_counts.get(
-                override_key,
-                0,
-            )
-            self._emergency_line_counts[override_key] = override_count + 1
-            text += (
-                " "
-                + override_lines[override_count % len(override_lines)]
-            )
+        if kind == "detected":
+            action_lines = EMERGENCY_ACTION_LINES.get(action)
+            if action_lines:
+                action_key = ("detected-action", category, action)
+                action_count = self._emergency_line_counts.get(
+                    action_key,
+                    0,
+                )
+                self._emergency_line_counts[action_key] = action_count + 1
+                text += (
+                    " "
+                    + action_lines[action_count % len(action_lines)]
+                )
         return text
 
     def _record_snapshot_events(self, snapshot: dict[str, Any]) -> None:

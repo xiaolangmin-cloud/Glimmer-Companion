@@ -113,4 +113,17 @@ IMPLEMENTATION_NOTES: tuple[dict[str, str], ...] = (
             "只在用户询问 Mod 能力、实现、启动链路或可行性时提供给模型。"
         ),
     },
+    {
+        "topic": "微光 Mod - 运行恢复与存档一致性",
+        "summary": "网络请求超时恢复、会话边界清任务和 KLEI 存档解码",
+        "tags": "mod 稳定性 恢复 控制器重启 超时 存档 KLEI 会话 任务 污染",
+        "content": (
+            "Lua 到控制器的请求带有代次和约 5 秒超时；旧控制器退出导致回调不返回时，"
+            "执行器会恢复 pending_request 并重新发送未确认事件，避免聊天栏和任务冻结。"
+            "快照携带 DST 主会话 ID，控制器发现进入新会话时自动清除旧任务并切回 "
+            "follow。伴侣 profile 以 KLEI 持久化格式保存，解码时会先剥离 `KLEI 1` "
+            "头并避免重复添加 return。范围采集会先导航到目标坐标，再连续处理匹配的 "
+            "target_prefab；空区域明确报告 target_not_found，不能假报完成。"
+        ),
+    },
 )

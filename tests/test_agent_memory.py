@@ -100,6 +100,13 @@ class AgentMemoryTests(unittest.TestCase):
                 )
                 self.assertIn("0.75", emergency_context)
                 self.assertIn("来狗啦来狗啦", emergency_context)
+                recovery_context = memory.render_implementation_context(
+                    "微光控制器重启后请求卡死和存档解码怎么办",
+                    limit=2,
+                    max_chars=1600,
+                )
+                self.assertIn("5 秒超时", recovery_context)
+                self.assertIn("KLEI 1", recovery_context)
                 self.assertEqual(
                     memory.render_implementation_context("帮我砍几棵树"),
                     "",

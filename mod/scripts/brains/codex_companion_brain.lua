@@ -1,5 +1,6 @@
 local INTERVAL = 0.25
 local NETWORK_INTERVAL = 0.5
+local NETWORK_REQUEST_TIMEOUT_SECONDS = 5
 local AREA_INTERVAL = 1.0
 local AREA_RELEASE_MARGIN = 8
 local ROUTE_STUCK_SECONDS = 20
@@ -267,6 +268,9 @@ local CodexCompanionBrain = Class(Brain, function(self, inst)
     self.intent = nil
     self.intent_received_at = 0
     self.pending_request = false
+    self.network_request_started_at = nil
+    self.network_request_id = 0
+    self.network_inflight_events = nil
     self.last_action_target = nil
     self.last_action_name = nil
     self.ents = {}
@@ -279,6 +283,7 @@ local CodexCompanionBrain = Class(Brain, function(self, inst)
     self.route = nil
     self.fetch_state = nil
     self.harvest_state = nil
+    self.area_state = nil
     self.collect_state = nil
     self.blocked_intents = {}
     self.server_non_sleepable_ready = false
@@ -733,6 +738,9 @@ function CodexCompanionBrain:BuildSnapshot(events)
         world = {
             shard = TheShard:GetShardId(),
             is_master = not TheShard:IsSecondary(),
+            session_id = TheWorld.components.shardstate ~= nil
+                and TheWorld.components.shardstate:GetMasterSessionId()
+                or nil,
             day = TheWorld.state.cycles,
             phase = TheWorld.state.phase,
             season = TheWorld.state.season,
@@ -760,6 +768,8 @@ end
 
 function CodexCompanionBrain:OnBridgeResponse(result, success, http_code, sent_events)
     self.pending_request = false
+    self.network_request_started_at = nil
+    self.network_inflight_events = nil
     if not success or result == nil or result == "" then
         for _, event in ipairs(sent_events or {}) do
             table.insert(self.pending_events, event)
@@ -836,14 +846,30 @@ function CodexCompanionBrain:NetworkTick()
     -- Keep polling during tent sleep so a new chat instruction can wake the
     -- companion immediately instead of waiting for daybreak.
     if self.pending_request then
-        return
+        local elapsed = GetTime() - (self.network_request_started_at or GetTime())
+        if elapsed <= NETWORK_REQUEST_TIMEOUT_SECONDS then
+            return
+        end
+        self.pending_request = false
+        self.network_request_started_at = nil
+        for _, event in ipairs(self.network_inflight_events or {}) do
+            table.insert(self.pending_events, event)
+        end
+        self.network_inflight_events = nil
     end
     self.pending_request = true
+    self.network_request_started_at = GetTime()
+    self.network_request_id = (self.network_request_id or 0) + 1
+    local request_id = self.network_request_id
     local sent_events = self.pending_events
     self.pending_events = {}
+    self.network_inflight_events = sent_events
     TheSim:QueryServer(
         self.bridge_url,
         function(result, success, http_code)
+            if request_id ~= self.network_request_id then
+                return
+            end
             self:OnBridgeResponse(result, success, http_code, sent_events)
         end,
         "POST",
@@ -888,6 +914,7 @@ function CodexCompanionBrain:GetActiveIntent()
         self.route = nil
         self.fetch_state = nil
         self.harvest_state = nil
+        self.area_state = nil
         self.collect_state = nil
         self.skill_state = nil
         self.craft_state = nil
@@ -3896,7 +3923,31 @@ function CodexCompanionBrain:ActionForTarget(target)
     end
 end
 
+function CodexCompanionBrain:RecordAreaHarvest(intent, prefab)
+    if self.area_state == nil
+        or self.area_state.intent_id ~= intent.intent_id
+    then
+        self.area_state = {
+            intent_id = intent.intent_id,
+            count = 0,
+            started_at = GetTime(),
+        }
+    end
+    self.area_state.count = (self.area_state.count or 0) + 1
+    self.area_state.last_prefab = prefab
+    self.harvest_state = nil
+    self:QueueEvent("item_acquired", {
+        intent_id = intent.intent_id,
+        mode = intent.mode,
+        item_prefab = prefab,
+        source = intent.mode,
+        amount = self.area_state.count,
+    })
+end
+
 function CodexCompanionBrain:Harvest(intent)
+    local area_mode = intent.mode == "harvest_area"
+        or intent.mode == "gather"
     if self.harvest_state == nil
         or self.harvest_state.intent_id ~= intent.intent_id
     then
@@ -3904,11 +3955,23 @@ function CodexCompanionBrain:Harvest(intent)
             intent_id = intent.intent_id,
             started_at = GetTime(),
             target_guid = intent.target_guid,
+            target_prefab = intent.target_prefab,
             acted = false,
         }
     end
     local target = self:FindTarget(intent)
     if target == nil or not target:IsValid() then
+        if area_mode then
+            if self.harvest_state.acted then
+                self:RecordAreaHarvest(
+                    intent,
+                    intent.target_prefab or self.harvest_state.target_prefab
+                )
+            else
+                self.harvest_state = nil
+            end
+            return
+        end
         if self.harvest_state.acted then
             self:QueueEvent("task_complete", {
                 intent_id = intent.intent_id,
@@ -3944,7 +4007,24 @@ function CodexCompanionBrain:Harvest(intent)
         self:SuppressIntent(intent)
         return
     end
+    if finished and not self.harvest_state.acted then
+        self.harvest_state = nil
+        if not area_mode then
+            self:QueueEvent("task_failed", {
+                intent_id = intent.intent_id,
+                mode = intent.mode,
+                reason = "target_unavailable",
+                target_prefab = target.prefab,
+            })
+            self:SuppressIntent(intent)
+        end
+        return
+    end
     if finished then
+        if area_mode then
+            self:RecordAreaHarvest(intent, target.prefab)
+            return
+        end
         self:QueueEvent("task_complete", {
             intent_id = intent.intent_id,
             mode = intent.mode,
@@ -3967,12 +4047,12 @@ function CodexCompanionBrain:Harvest(intent)
 end
 
 function CodexCompanionBrain:FindAreaTarget(intent, mode)
-    local radius = type(intent.params) == "table"
-        and tonumber(intent.params.radius)
+    local params = type(intent.params) == "table" and intent.params or {}
+    local radius = params.radius ~= nil
+        and tonumber(params.radius)
         or 18
-    local target_prefabs = type(intent.params) == "table"
-        and type(intent.params.target_prefabs) == "table"
-        and intent.params.target_prefabs
+    local target_prefabs = type(params.target_prefabs) == "table"
+        and params.target_prefabs
         or nil
     local target_prefab_set = nil
     if target_prefabs ~= nil then
@@ -3981,8 +4061,14 @@ function CodexCompanionBrain:FindAreaTarget(intent, mode)
             target_prefab_set[prefab] = true
         end
     end
+    local requested_prefab = intent.target_prefab or params.target_prefab
+    if type(requested_prefab) == "string" and requested_prefab ~= "" then
+        target_prefab_set = target_prefab_set or {}
+        target_prefab_set[requested_prefab] = true
+    end
     local crop_only = mode == "harvest_area"
-        and not (type(intent.params) == "table" and intent.params.all_plants)
+        and not params.all_plants
+        and target_prefab_set == nil
     local target = FindEntity(
         self.inst,
         radius,
@@ -4018,14 +4104,57 @@ function CodexCompanionBrain:FindAreaTarget(intent, mode)
 end
 
 function CodexCompanionBrain:AreaTask(intent, mode)
+    if self.area_state == nil
+        or self.area_state.intent_id ~= intent.intent_id
+    then
+        self.area_state = {
+            intent_id = intent.intent_id,
+            count = 0,
+            started_at = GetTime(),
+            arrived = intent.position == nil,
+        }
+    end
+    local params = type(intent.params) == "table" and intent.params or {}
+    if intent.position ~= nil and not self.area_state.arrived then
+        local arrived = self:NavigateTo(
+            intent,
+            intent.position[1],
+            intent.position[2],
+            tonumber(params.arrive_distance) or 4,
+            "area_travel"
+        )
+        if not arrived then
+            return
+        end
+        self.area_state.arrived = true
+    end
     local target = self:FindAreaTarget(intent, mode)
     if target == nil then
-        self:QueueEvent("task_complete", {
-            intent_id = intent.intent_id,
-            mode = mode,
-            verified = true,
-        })
+        local requested = intent.target_prefab
+            or params.target_prefab
+            or (
+                type(params.target_prefabs) == "table"
+                and params.target_prefabs[1]
+                or nil
+            )
+        if requested ~= nil and (self.area_state.count or 0) == 0 then
+            self:QueueEvent("task_failed", {
+                intent_id = intent.intent_id,
+                mode = mode,
+                reason = "target_not_found",
+                target_prefab = requested,
+            })
+        else
+            self:QueueEvent("task_complete", {
+                intent_id = intent.intent_id,
+                mode = mode,
+                target_prefab = requested,
+                amount = self.area_state.count or 0,
+                verified = true,
+            })
+        end
         self:SuppressIntent(intent)
+        self.area_state = nil
         return
     end
     local narrowed = {}

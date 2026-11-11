@@ -529,7 +529,11 @@ local function DecodeProfile(raw)
     if type(loader) ~= "function" then
         return nil
     end
-    local chunk, err = loader("return " .. raw, "codex_companion_profile_v2")
+    local body = string.gsub(raw, "^KLEI%s+%d+%s+", "", 1)
+    if string.match(body, "^%s*return") == nil then
+        body = "return " .. body
+    end
+    local chunk, err = loader(body, "codex_companion_profile_v2")
     if chunk == nil then
         print("[Glimmer Companion] failed to decode profile", err)
         return nil

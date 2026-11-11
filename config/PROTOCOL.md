@@ -89,6 +89,10 @@ Content-Type: application/json
     `survival_policy="force"` 同样覆盖应急层对任务的硬性中断。执行器只保留不会
     改变任务的防护动作，并明确汇报风险；跨世界限制不受该覆盖影响。未知自定义
     Mod 事件不纳入原生应急检测。
+21. 游戏快照携带 DST 主会话 ID。控制器发现新会话时自动清除上一会话的任务并切回
+    `follow/session_started_follow`，避免退出再进入世界后继续旧房间的采集或战斗。
+    Lua 网络请求带代次与约 5 秒超时；控制器重启、连接重置或回调丢失后会自动恢复
+    上报，不会永久卡在 `pending_request`。
 
 ## 战斗契约
 
@@ -193,6 +197,11 @@ Content-Type: application/json
 60 秒仍无来源才报告 `task_failed/loot_source_not_found`。默认不逐只播报击杀，
 完成交付时直接汇报一次；背包已满、路径卡住、玩家背包满和致命伤保护仍会分别报告
 明确原因。
+
+`harvest_area` 和 `gather` 会先前往意图中的 `position`，随后在区域内连续处理
+同类目标，直到范围中再没有可处理对象后上报一次完成和总数。若用户指定了具体
+`target_prefab`/`target_prefabs` 但最初就没有找到目标，会明确报告
+`task_failed/target_not_found`，不会把空区域误报成已经采集完成。
 
 ## 支持模式
 

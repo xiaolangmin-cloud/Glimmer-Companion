@@ -1063,9 +1063,9 @@ class CompanionServiceTests(unittest.TestCase):
                 messages = service.state()["messages"]
                 self.assertEqual(len(messages), 3)
                 self.assertIn("周围突然变黑", messages[0]["text"])
-                self.assertIn("点亮火把", messages[0]["text"])
+                self.assertIn("火把点亮", messages[0]["text"])
                 self.assertIn("地震", messages[1]["text"])
-                self.assertIn("穿好护甲", messages[1]["text"])
+                self.assertIn("先站稳", messages[1]["text"])
                 self.assertIn("地面安静下来", messages[2]["text"])
                 self.assertTrue(all(item["source"] == "emergency" for item in messages))
                 service.tick(
@@ -1092,6 +1092,79 @@ class CompanionServiceTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(set(hound_lines)), 4)
                 self.assertIn("来狗啦来狗啦", hound_lines[0])
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_new_master_session_clears_stale_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            service.force_command(
+                {
+                    "intent_id": "old-world-task",
+                    "mode": "collect_loot",
+                    "target_prefab": "silk",
+                    "lease_seconds": 1800,
+                }
+            )
+            base_snapshot = {
+                "companion": {"prefab": "waxwell"},
+                "player": {"guid": "1", "prefab": "waxwell"},
+                "nearby": [],
+                "events": [],
+            }
+            try:
+                service.tick(
+                    {
+                        **base_snapshot,
+                        "world": {
+                            "shard": "1",
+                            "is_master": True,
+                            "session_id": "session-a",
+                        },
+                    }
+                )
+                self.assertEqual(
+                    service.state()["intent"]["intent_id"],
+                    "old-world-task",
+                )
+                service.tick(
+                    {
+                        **base_snapshot,
+                        "world": {
+                            "shard": "1",
+                            "is_master": True,
+                            "session_id": "session-b",
+                        },
+                    }
+                )
+                state = service.state()
+                self.assertEqual(state["intent"]["mode"], "follow")
+                self.assertEqual(
+                    state["intent"]["reason"],
+                    "session_started_follow",
+                )
             finally:
                 service.stop()
                 service.memory.close()

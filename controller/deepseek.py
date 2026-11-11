@@ -72,14 +72,16 @@ class DeepSeekPlanner:
             prefab = entity.get("prefab")
             if prefab and prefab not in prefabs:
                 prefabs.append(prefab)
+        world = snapshot.get("world") or {}
         memory_query = " ".join(
-            [
+            str(value or "")
+            for value in (
                 user_instruction or "",
-                snapshot.get("world", {}).get("phase", ""),
-                snapshot.get("world", {}).get("season", ""),
+                world.get("phase"),
+                world.get("season"),
                 " ".join(str(p) for p in prefabs[:12]),
-                current_intent.get("reason", ""),
-            ]
+                current_intent.get("reason"),
+            )
         )
         memory_context = self.memory.render_context(memory_query, limit=6)
         skill_context = (
@@ -119,12 +121,13 @@ class DeepSeekPlanner:
         capabilities = dict(snapshot.get("capabilities") or {})
         recipes = capabilities.get("known_recipes") or []
         query_text = " ".join(
-            [
+            str(value or "")
+            for value in (
                 user_instruction or "",
                 json.dumps(active_plan or {}, ensure_ascii=False),
-                current_intent.get("target_prefab", ""),
-                current_intent.get("reason", ""),
-            ]
+                current_intent.get("target_prefab"),
+                current_intent.get("reason"),
+            )
         ).lower()
         query_terms = {
             term
