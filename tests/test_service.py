@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from controller.config import Settings
-from controller.service import CompanionService
+from controller.service import CompanionService, IMPORTANT_EVENTS
 
 
 class FakePlanner:
@@ -982,6 +982,92 @@ class CompanionServiceTests(unittest.TestCase):
                 self.assertEqual(state["intent"]["mode"], "follow")
                 self.assertEqual(state["intent"]["reason"], "survival_return_follow")
                 self.assertIn("饱食度", state["messages"][-1]["text"])
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_recovery_events_report_estimates_without_waking_model(self) -> None:
+        self.assertFalse(
+            {
+                "recovery_started",
+                "recovery_completed",
+                "recovery_unavailable",
+            }
+            & IMPORTANT_EVENTS
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.tick(
+                    {
+                        "companion": {"prefab": "waxwell"},
+                        "player": {"guid": "1", "prefab": "waxwell"},
+                        "world": {"shard": "1", "is_master": True},
+                        "nearby": [],
+                        "events": [
+                            {
+                                "event_id": "recovery-start-1",
+                                "type": "recovery_started",
+                                "method": "tent",
+                                "sleep_seconds": 190,
+                                "estimated_hunger_cost": 58,
+                                "expected_health_gain": 120,
+                                "expected_sanity_gain": 60,
+                            },
+                            {
+                                "event_id": "recovery-unavailable-1",
+                                "type": "recovery_unavailable",
+                                "reason": "not_enough_hunger_for_sleep",
+                                "hunger_cost": 92,
+                                "hunger_after": 8,
+                                "hunger_reserve": 18,
+                            },
+                            {
+                                "event_id": "recovery-food-1",
+                                "type": "recovery_started",
+                                "method": "food",
+                                "hunger_percent": 40,
+                            },
+                            {
+                                "event_id": "recovery-heal-1",
+                                "type": "recovery_completed",
+                                "method": "healing_item",
+                                "health": 80,
+                            },
+                        ],
+                    }
+                )
+                messages = service.state()["messages"]
+                self.assertEqual(len(messages), 4)
+                self.assertIn("大约睡 190 秒", messages[0]["text"])
+                self.assertIn("预计消耗 58 点饥饿", messages[0]["text"])
+                self.assertIn("恢复 120 点生命", messages[0]["text"])
+                self.assertIn("只剩 8 点", messages[1]["text"])
+                self.assertIn("至少要保留 18 点", messages[1]["text"])
+                self.assertIn("先吃些随身食物", messages[2]["text"])
+                self.assertIn("治疗物品用完了", messages[3]["text"])
+                self.assertIn("生命 80", messages[3]["text"])
             finally:
                 service.stop()
                 service.memory.close()

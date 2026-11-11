@@ -11,6 +11,18 @@ local CAPABILITY_CACHE_SECONDS = 5
 local MAX_CRAFTABLE_RECIPES = 60
 local COMBAT_STUCK_SECONDS = 25
 local MAX_KNOWN_RECIPES = 1000
+local RECOVERY_CHECK_SECONDS = 60
+local RECOVERY_NOTICE_COOLDOWN_SECONDS = 120
+local RECOVERY_TENT_SEARCH_RADIUS = 40
+local RECOVERY_DANGER_RADIUS = 18
+local RECOVERY_SLEEP_DANGER_RADIUS = 15
+local RECOVERY_EMERGENCY_SLEEP_SECONDS = 30
+local RECOVERY_MIN_SLEEP_SECONDS = 60
+local RECOVERY_TRAVEL_TIMEOUT_SECONDS = 45
+local RECOVERY_MIN_HEALTH_GAIN = 12
+local RECOVERY_MIN_SANITY_GAIN = 8
+local RECOVERY_HUNGER_RESERVE_RATIO = 0.12
+local RECOVERY_HUNGER_RESERVE_MIN = 10
 local REMOTE_TASK_MODES = {
     move_to = true,
     move_to_landmark = true,
@@ -279,6 +291,9 @@ local CodexCompanionBrain = Class(Brain, function(self, inst)
     self.last_map_reveal_at = 0
     self.last_map_reveal_x = nil
     self.last_map_reveal_z = nil
+    self.recovery_state = nil
+    self.recovery_next_check = 0
+    self.recovery_notice_at = {}
 end)
 
 function CodexCompanionBrain:EnsureAwake()
@@ -761,7 +776,9 @@ function CodexCompanionBrain:NetworkTick()
     if self.inst:IsAsleep() then
         self:EnsureAwake()
     end
-    if self.pending_request or self.inst:IsAsleep() then
+    -- Keep polling during tent sleep so a new chat instruction can wake the
+    -- companion immediately instead of waiting for daybreak.
+    if self.pending_request then
         return
     end
     self.pending_request = true
@@ -2100,6 +2117,530 @@ function CodexCompanionBrain:EnsureTaskSurvival(intent)
     return false
 end
 
+function CodexCompanionBrain:NotifyRecoveryUnavailable(reason, extra)
+    local now = GetTime()
+    if now - (
+        self.recovery_notice_at[reason] or -math.huge
+    ) < RECOVERY_NOTICE_COOLDOWN_SECONDS then
+        return
+    end
+    self.recovery_notice_at[reason] = now
+    local payload = {
+        reason = reason,
+    }
+    for key, value in pairs(extra or {}) do
+        payload[key] = value
+    end
+    self:QueueEvent("recovery_unavailable", payload)
+end
+
+function CodexCompanionBrain:FindRecoveryTent()
+    local player = GetPrimaryPlayer(self.inst)
+    local origin = player ~= nil and player:IsValid() and player or self.inst
+    local x, _, z = origin.Transform:GetWorldPosition()
+    local entities = TheSim:FindEntities(
+        x,
+        0,
+        z,
+        RECOVERY_TENT_SEARCH_RADIUS,
+        nil,
+        { "INLIMBO", "NOCLICK", "CLASSIFIED", "FX" }
+    )
+    local best = nil
+    local best_distance = math.huge
+    for _, entity in ipairs(entities) do
+        local sleepingbag = entity.components.sleepingbag
+        if sleepingbag ~= nil
+            and not sleepingbag:InUse()
+            and not entity:HasTag("hassleeper")
+        then
+            local distance = self.inst:GetDistanceSqToInst(entity)
+            if distance < best_distance then
+                best = entity
+                best_distance = distance
+            end
+        end
+    end
+    return best
+end
+
+function CodexCompanionBrain:FindNearbyDanger(radius)
+    return FindEntity(
+        self.inst,
+        radius,
+        function(entity)
+            return entity ~= self.inst
+                and entity.components.health ~= nil
+                and not entity.components.health:IsDead()
+                and entity.components.combat ~= nil
+                and entity.components.combat:CanTarget(self.inst)
+        end,
+        nil,
+        { "INLIMBO", "NOCLICK", "CLASSIFIED", "FX" }
+    )
+end
+
+function CodexCompanionBrain:CanUseRecoveryTent(tent)
+    if tent == nil or not tent:IsValid() or tent.components.sleepingbag == nil then
+        return false, "sleepingbag_missing"
+    end
+    local sleepingbag = tent.components.sleepingbag
+    if sleepingbag:InUse() or tent:HasTag("hassleeper") then
+        return false, "sleepingbag_in_use"
+    end
+    if tent:HasTag("burnt")
+        or (
+            tent.components.burnable ~= nil
+            and tent.components.burnable:IsBurning()
+        )
+    then
+        return false, "tent_burning"
+    end
+    if self.inst.components.sleepingbaguser == nil then
+        return false, "sleepingbaguser_missing"
+    end
+    local can_sleep, sleep_reason =
+        self.inst.components.sleepingbaguser:ShouldSleep()
+    if not can_sleep then
+        return false, sleep_reason or "cannot_sleep"
+    end
+    if tent.components.finiteuses ~= nil
+        and tent.components.finiteuses:GetPercent() <= 0
+    then
+        return false, "tent_empty"
+    end
+
+    local phase = TheWorld.state.phase
+    local sleep_phase = sleepingbag:GetSleepPhase()
+    local valid_phase = sleep_phase == "day"
+        and phase == "day"
+        or sleep_phase == "night"
+            and (phase == "dusk" or phase == "night")
+    if not valid_phase then
+        return false, "wrong_time_of_day"
+    end
+    if (
+        type(self.inst.IsNearDanger) == "function"
+        and self.inst:IsNearDanger(self.inst)
+    ) or self:FindNearbyDanger(RECOVERY_DANGER_RADIUS) ~= nil then
+        return false, "danger_nearby"
+    end
+
+    local clock = TheWorld.net ~= nil
+        and TheWorld.net.components.clock
+        or nil
+    if clock == nil then
+        return false, "clock_missing"
+    end
+    local wake_phase = sleep_phase == "day" and "dusk" or "day"
+    local sleep_seconds = clock:GetTimeUntilPhase(wake_phase)
+
+    local health = self.inst.components.health
+    local hunger = self.inst.components.hunger
+    local sanity = self.inst.components.sanity
+    local sleepingbaguser = self.inst.components.sleepingbaguser
+    local tick_period = math.max(0.1, sleepingbag.tick_period or 1)
+    local tick_count = math.floor(sleep_seconds / tick_period)
+    local health_percent = health ~= nil and health.maxhealth > 0
+        and health.currenthealth / health.maxhealth
+        or 1
+    local sanity_percent = sanity ~= nil and sanity.max > 0
+        and sanity.current / sanity.max
+        or 1
+    local emergency = health_percent < 0.35 or sanity_percent < 0.2
+    local min_sleep_seconds = emergency
+        and RECOVERY_EMERGENCY_SLEEP_SECONDS
+        or RECOVERY_MIN_SLEEP_SECONDS
+    local health_gain = 0
+    if health ~= nil and sleepingbag.healthsleep ~= false then
+        health_gain = math.min(
+            math.max(0, health.maxhealth - health.currenthealth),
+            tick_count
+                * math.max(0, sleepingbag.health_tick or 0)
+                * (sleepingbaguser.health_bonus_mult or 1)
+        )
+    end
+    local sanity_gain = 0
+    if sanity ~= nil then
+        sanity_gain = math.min(
+            math.max(0, sanity.max - sanity.current),
+            tick_count
+                * math.max(0, sleepingbag.sanity_tick or 0)
+                * (sleepingbaguser.sanity_bonus_mult or 1)
+        )
+    end
+    local hunger_cost = tick_count
+        * math.abs(sleepingbag.hunger_tick or 0)
+        * (sleepingbaguser.hunger_bonus_mult or 1)
+    local estimate = {
+        sleep_seconds = sleep_seconds,
+        minimum_sleep_seconds = min_sleep_seconds,
+        hunger_cost = hunger_cost,
+        expected_health_gain = health_gain,
+        expected_sanity_gain = sanity_gain,
+    }
+    if sleep_seconds < min_sleep_seconds then
+        return false, "not_enough_sleep_time", estimate
+    end
+    if health_gain < RECOVERY_MIN_HEALTH_GAIN
+        and sanity_gain < RECOVERY_MIN_SANITY_GAIN
+    then
+        return false, "not_enough_recovery_benefit", estimate
+    end
+    if hunger == nil then
+        return true, estimate
+    end
+    local reserve = math.max(
+        RECOVERY_HUNGER_RESERVE_MIN,
+        hunger.max * RECOVERY_HUNGER_RESERVE_RATIO,
+        (TUNING ~= nil and TUNING.CALORIES_MED) or 0
+    )
+    estimate.hunger_after = hunger.current - hunger_cost
+    estimate.hunger_reserve = reserve
+    if hunger.current - hunger_cost < reserve then
+        return false, "not_enough_hunger_for_sleep", estimate
+    end
+    return true, estimate
+end
+
+function CodexCompanionBrain:FindRecoveryFood()
+    local inventory = self.inst.components.inventory
+    local eater = self.inst.components.eater
+    if inventory == nil or eater == nil then
+        return nil
+    end
+    for _, item in pairs(inventory.itemslots) do
+        if item.components.edible ~= nil and eater:CanEat(item) then
+            return item
+        end
+    end
+end
+
+function CodexCompanionBrain:QueueRecoveryEat(item)
+    if item == nil
+        or self.inst.sg == nil
+        or self.inst.sg:HasStateTag("busy")
+    then
+        return false
+    end
+    self:StopAll()
+    self.inst.components.locomotor:PushAction(
+        BufferedAction(self.inst, self.inst, ACTIONS.EAT, item),
+        true
+    )
+    return true
+end
+
+function CodexCompanionBrain:TryRecoveryHealing()
+    local inventory = self.inst.components.inventory
+    if inventory == nil or self.inst.components.health == nil then
+        return false
+    end
+    for _, item in pairs(inventory.itemslots) do
+        if item.components.healer ~= nil or item.components.maxhealer ~= nil then
+            if self.inst.sg == nil
+                or not self.inst.sg:HasStateTag("busy")
+            then
+                self:StopAll()
+                self.inst.components.locomotor:PushAction(
+                    BufferedAction(self.inst, self.inst, ACTIONS.HEAL, item),
+                    true
+                )
+                return true
+            end
+            return false
+        end
+    end
+    return false
+end
+
+function CodexCompanionBrain:NotifyRecoveryCompleted(method)
+    self:QueueEvent("recovery_completed", {
+        method = method,
+        health = self.inst.components.health ~= nil
+            and Round(self.inst.components.health.currenthealth)
+            or nil,
+        hunger = self.inst.components.hunger ~= nil
+            and Round(self.inst.components.hunger.current)
+            or nil,
+        sanity = self.inst.components.sanity ~= nil
+            and Round(self.inst.components.sanity.current)
+            or nil,
+    })
+end
+
+function CodexCompanionBrain:StartRecovery(intent)
+    local health = self.inst.components.health
+    local hunger = self.inst.components.hunger
+    local sanity = self.inst.components.sanity
+    local health_percent = health ~= nil and health.maxhealth > 0
+        and health.currenthealth / health.maxhealth
+        or 1
+    local hunger_percent = hunger ~= nil and hunger.max > 0
+        and hunger.current / hunger.max
+        or 1
+    local sanity_percent = sanity ~= nil and sanity.max > 0
+        and sanity.current / sanity.max
+        or 1
+
+    if health_percent < 0.45 and self:TryRecoveryHealing() then
+        self.recovery_state = {
+            stage = "heal",
+            started_at = GetTime(),
+        }
+        self:QueueEvent("recovery_started", {
+            method = "healing_item",
+            health_percent = Round(health_percent * 100),
+        })
+        return true
+    end
+    if hunger_percent < 0.55 then
+        if self:QueueRecoveryEat(self:FindRecoveryFood()) then
+            self.recovery_state = {
+                stage = "eat",
+                started_at = GetTime(),
+            }
+        self:QueueEvent("recovery_started", {
+            method = "food",
+            hunger_percent = Round(hunger_percent * 100),
+        })
+            return true
+        end
+        self:NotifyRecoveryUnavailable("recovery_food_missing", {
+            hunger_percent = Round(hunger_percent * 100),
+        })
+        self.recovery_next_check = GetTime() + RECOVERY_CHECK_SECONDS
+    end
+
+    if health_percent >= 0.65 and sanity_percent >= 0.45 then
+        return false
+    end
+    local tent = self:FindRecoveryTent()
+    if tent == nil then
+        self:NotifyRecoveryUnavailable("recovery_tent_missing", {
+            health_percent = Round(health_percent * 100),
+            sanity_percent = Round(sanity_percent * 100),
+        })
+        self.recovery_next_check = GetTime() + RECOVERY_CHECK_SECONDS
+        return false
+    end
+    local can_sleep, estimate_or_reason, details =
+        self:CanUseRecoveryTent(tent)
+    if not can_sleep then
+        local extra = {
+            tent_prefab = tent.prefab,
+            health_percent = Round(health_percent * 100),
+            hunger_percent = Round(hunger_percent * 100),
+            sanity_percent = Round(sanity_percent * 100),
+        }
+        for key, value in pairs(details or {}) do
+            extra[key] = value
+        end
+        self:NotifyRecoveryUnavailable(
+            estimate_or_reason or "tent_unavailable",
+            extra
+        )
+        self.recovery_next_check = GetTime() + RECOVERY_CHECK_SECONDS
+        return false
+    end
+
+    self.recovery_state = {
+        stage = "travel",
+        started_at = GetTime(),
+        follow_intent_id = intent ~= nil and intent.intent_id or nil,
+        tent = tent,
+        estimate = estimate_or_reason,
+    }
+    self:QueueEvent("recovery_started", {
+        method = "tent",
+        tent_prefab = tent.prefab,
+        health_percent = Round(health_percent * 100),
+        hunger_percent = Round(hunger_percent * 100),
+        sanity_percent = Round(sanity_percent * 100),
+        sleep_seconds = Round(estimate_or_reason.sleep_seconds),
+        estimated_hunger_cost = Round(estimate_or_reason.hunger_cost),
+        expected_health_gain = Round(
+            estimate_or_reason.expected_health_gain
+        ),
+        expected_sanity_gain = Round(
+            estimate_or_reason.expected_sanity_gain
+        ),
+        hunger_after = estimate_or_reason.hunger_after ~= nil
+            and Round(estimate_or_reason.hunger_after)
+            or nil,
+    })
+    return true
+end
+
+function CodexCompanionBrain:UpdateRecovery(intent)
+    local params = intent ~= nil
+        and type(intent.params) == "table"
+        and intent.params
+        or {}
+    local recovery_override = params.ignore_autonomous_recovery == true
+        or params.ignore_survival_safety == true
+    local new_follow_intent = self.recovery_state ~= nil
+        and self.recovery_state.follow_intent_id ~= nil
+        and intent ~= nil
+        and intent.mode == "follow"
+        and tostring(intent.intent_id)
+            ~= tostring(self.recovery_state.follow_intent_id)
+    local follow_reason = intent ~= nil
+        and tostring(intent.reason or "")
+        or ""
+    local default_follow_replacement = new_follow_intent
+        and (
+            follow_reason == "default_follow"
+            or follow_reason == "intent_lease_expired_follow"
+        )
+    if default_follow_replacement then
+        self.recovery_state.follow_intent_id = intent.intent_id
+    end
+    if recovery_override
+        or (
+            intent ~= nil
+            and intent.mode ~= "follow"
+        )
+        or (new_follow_intent and not default_follow_replacement)
+    then
+        if self.inst.sleepingbag ~= nil
+            and self.inst.components.sleepingbaguser ~= nil
+        then
+            self.inst.components.sleepingbaguser:DoWakeUp()
+        end
+        if self.recovery_state ~= nil then
+            self:StopAll()
+        end
+        self.recovery_state = nil
+        return false
+    end
+    if self.inst.sleepingbag ~= nil then
+        if self:FindNearbyDanger(RECOVERY_SLEEP_DANGER_RADIUS) ~= nil then
+            self.inst.components.sleepingbaguser:DoWakeUp()
+            self.recovery_state = nil
+            self.recovery_next_check = GetTime() + 5
+            self:QueueEvent("recovery_unavailable", {
+                reason = "danger_during_sleep",
+            })
+            return true
+        end
+        self.recovery_state = self.recovery_state or {
+            stage = "sleeping",
+            started_at = GetTime(),
+        }
+        self.recovery_state.stage = "sleeping"
+        return true
+    end
+    if self.recovery_state ~= nil
+        and self.recovery_state.stage == "sleeping"
+    then
+        self:NotifyRecoveryCompleted("tent")
+        self.recovery_state = nil
+        self.recovery_next_check = GetTime() + 5
+        return false
+    end
+    if GetTime() < self.recovery_next_check then
+        return false
+    end
+    if self.recovery_state == nil and self:StartRecovery(intent) then
+        return true
+    end
+    local state = self.recovery_state
+    if state == nil then
+        return false
+    end
+
+    if state.stage == "eat" then
+        local hunger = self.inst.components.hunger
+        if hunger == nil or hunger.current / hunger.max >= 0.55 then
+            self:NotifyRecoveryCompleted("food")
+            self.recovery_state = nil
+            self.recovery_next_check = GetTime() + 1
+            return false
+        end
+        if not self:QueueRecoveryEat(self:FindRecoveryFood()) then
+            self:NotifyRecoveryUnavailable("recovery_food_missing", {
+                hunger_percent = Round(hunger.current / hunger.max * 100),
+            })
+            self.recovery_state = nil
+            self.recovery_next_check = GetTime() + RECOVERY_CHECK_SECONDS
+        end
+        return true
+    end
+
+    if state.stage == "heal" then
+        local health = self.inst.components.health
+        if health == nil or health.currenthealth / health.maxhealth >= 0.65 then
+            self:NotifyRecoveryCompleted("healing_item")
+            self.recovery_state = nil
+            self.recovery_next_check = GetTime() + 1
+            return false
+        end
+        if not self:TryRecoveryHealing() then
+            self.recovery_state = nil
+            self.recovery_next_check = GetTime() + 1
+            return false
+        end
+        return true
+    end
+
+    local tent = state.tent
+    local can_sleep, reason, details = self:CanUseRecoveryTent(tent)
+    if state.stage == "travel" then
+        if not can_sleep then
+            self:NotifyRecoveryUnavailable(
+                reason or "tent_unavailable",
+                details
+            )
+            self.recovery_state = nil
+            self.recovery_next_check = GetTime() + RECOVERY_CHECK_SECONDS
+            return false
+        end
+        state.travel_started_at = state.travel_started_at or GetTime()
+        if GetTime() - state.travel_started_at
+            > RECOVERY_TRAVEL_TIMEOUT_SECONDS
+        then
+            self:NotifyRecoveryUnavailable("recovery_tent_unreachable", {
+                tent_prefab = tent ~= nil and tent.prefab or nil,
+            })
+            self.recovery_state = nil
+            self.recovery_next_check = GetTime() + RECOVERY_CHECK_SECONDS
+            self:StopAll()
+            return false
+        end
+        local tx, _, tz = tent.Transform:GetWorldPosition()
+        local recovery_intent = {
+            intent_id = "local-recovery-" .. tostring(state.started_at),
+            params = {
+                fail_on_stuck = false,
+            },
+        }
+        if self:NavigateTo(recovery_intent, tx, tz, 2, "recovery_travel") then
+            state.stage = "entering"
+            state.enter_started_at = GetTime()
+            self.inst:ClearBufferedAction()
+            self.inst.components.locomotor:PushAction(
+                BufferedAction(self.inst, tent, ACTIONS.SLEEPIN),
+                true
+            )
+        end
+        return true
+    end
+
+    if state.stage == "entering" then
+        if GetTime() - (state.enter_started_at or GetTime()) > 8 then
+            self:NotifyRecoveryUnavailable("tent_enter_failed", {
+                tent_prefab = tent ~= nil and tent.prefab or nil,
+            })
+            self.recovery_state = nil
+            self.recovery_next_check = GetTime() + RECOVERY_CHECK_SECONDS
+            return false
+        end
+        return true
+    end
+    return true
+end
+
 function CodexCompanionBrain:CollectLoot(intent)
     local prefab = intent.target_prefab
         or (type(intent.params) == "table" and intent.params.item_prefab)
@@ -2775,6 +3316,9 @@ function CodexCompanionBrain:Act()
         self.safety_retreat_reason = nil
     end
     local intent = self:GetActiveIntent()
+    if self:UpdateRecovery(intent) then
+        return
+    end
     if intent == nil then
         self:Follow()
         return
@@ -2895,6 +3439,12 @@ function CodexCompanionBrain:PrepareForMigration(from_shard, to_shard)
     self.intent = nil
     self.intent_received_at = 0
     self.active_intent_id = nil
+    if self.inst.sleepingbag ~= nil
+        and self.inst.components.sleepingbaguser ~= nil
+    then
+        self.inst.components.sleepingbaguser:DoWakeUp()
+    end
+    self.recovery_state = nil
     self:StopAll()
     return interrupted
 end
@@ -2932,6 +3482,7 @@ function CodexCompanionBrain:OnStart()
     end
     self:EnsureAwake()
     self.death_listener = function(_, data)
+        self.recovery_state = nil
         self:QueueEvent("companion_dead", {
             cause = data ~= nil and data.cause or nil,
             afflicter = data ~= nil
@@ -2987,6 +3538,12 @@ function CodexCompanionBrain:OnStop()
         self.map_task:Cancel()
         self.map_task = nil
     end
+    if self.inst.sleepingbag ~= nil
+        and self.inst.components.sleepingbaguser ~= nil
+    then
+        self.inst.components.sleepingbaguser:DoWakeUp()
+    end
+    self.recovery_state = nil
     self:ReleaseArea()
     self:StopAll()
 end

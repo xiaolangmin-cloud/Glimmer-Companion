@@ -45,6 +45,61 @@ CROSS_WORLD_REPLY = (
     "过世界必须由你本人通过传送门或洞口带着它切换。"
 )
 
+RECOVERY_REASON_TEXT = {
+    "recovery_food_missing": "饥饿偏低，但没有能吃的食物",
+    "recovery_tent_missing": "状态偏低，但附近没有可用帐篷",
+    "not_enough_hunger_for_sleep": "剩余饥饿不够支付整晚睡眠",
+    "not_enough_sleep_time": "距离唤醒时间太近，睡觉收益不足",
+    "not_enough_recovery_benefit": "睡眠预计恢复的生命和精神太少",
+    "wrong_time_of_day": "当前时间不适合使用附近帐篷",
+    "danger_nearby": "附近有危险，暂时不能睡",
+    "danger_during_sleep": "睡觉时出现危险，已经醒来",
+    "sleepingbag_missing": "附近的睡具已经不可用了",
+    "sleepingbag_in_use": "附近的帐篷正在被使用",
+    "sleepingbaguser_missing": "微光当前不能使用睡具",
+    "cannot_sleep": "当前状态不满足睡觉条件",
+    "tent_empty": "附近帐篷已经没有剩余使用次数",
+    "tent_burning": "附近帐篷正在燃烧",
+    "clock_missing": "无法读取当前昼夜时间",
+    "recovery_tent_unreachable": "无法走到附近帐篷",
+    "tent_enter_failed": "到达帐篷后仍无法进入睡眠",
+}
+
+
+def recovery_unavailable_detail(event: dict[str, Any]) -> str:
+    reason = str(event.get("reason") or "")
+    if reason == "not_enough_hunger_for_sleep":
+        hunger_cost = event.get("hunger_cost")
+        hunger_after = event.get("hunger_after")
+        reserve = event.get("hunger_reserve")
+        if (
+            hunger_cost is not None
+            and hunger_after is not None
+            and reserve is not None
+        ):
+            return (
+                "整晚睡眠约要消耗 "
+                f"{hunger_cost} 点饥饿，睡完只剩 {hunger_after} 点，"
+                f"至少要保留 {reserve} 点"
+            )
+    if reason == "not_enough_sleep_time":
+        sleep_seconds = event.get("sleep_seconds")
+        minimum = event.get("minimum_sleep_seconds")
+        if sleep_seconds is not None and minimum is not None:
+            return (
+                f"距离唤醒只剩 {sleep_seconds} 秒，"
+                f"这种状态至少需要 {minimum} 秒的睡眠收益"
+            )
+    if reason == "not_enough_recovery_benefit":
+        health_gain = event.get("expected_health_gain")
+        sanity_gain = event.get("expected_sanity_gain")
+        if health_gain is not None and sanity_gain is not None:
+            return (
+                "这段时间预计只能恢复 "
+                f"{health_gain} 点生命、{sanity_gain} 点精神，收益太少"
+            )
+    return RECOVERY_REASON_TEXT.get(reason, "当前条件不适合睡觉")
+
 
 class CompanionService:
     def __init__(self, settings: Settings) -> None:
@@ -517,6 +572,9 @@ class CompanionService:
                 "combat_target_defeated": "伴侣击败了战斗目标",
                 "combat_target_lost": "伴侣跟丢了战斗目标",
                 "world_transition": "伴侣已随你完成世界切换",
+                "recovery_started": "微光开始自主恢复状态",
+                "recovery_completed": "微光完成自主恢复",
+                "recovery_unavailable": "微光当前无法安全自主恢复",
             }
             message = messages.get(event_type, f"游戏事件：{event_type}")
             if (
@@ -534,6 +592,12 @@ class CompanionService:
                 message = "伴侣饱食度不足且没有可用食物，已取消远行并返回跟随"
             elif event_type == "task_failed" and reason == "survival_health_low":
                 message = "伴侣生命值过低，已取消远行并返回跟随"
+            elif event_type == "recovery_unavailable":
+                message = (
+                    "微光无法自行恢复（"
+                    + recovery_unavailable_detail(event)
+                    + "）"
+                )
             elif (
                 event_type == "task_complete"
                 and event.get("mode") == "collect_loot"
@@ -546,7 +610,7 @@ class CompanionService:
                     str(event.get("item_prefab") or "物品"),
                 )
                 message = f"伴侣收集完成：{item_name} {event.get('amount')} 个"
-            if reason:
+            if reason and event_type != "recovery_unavailable":
                 message += f"（{reason}）"
             data = {
                 key: value
@@ -694,6 +758,63 @@ class CompanionService:
                     {"text": text, "expects_response": False},
                     current.intent_id,
                     "safety",
+                )
+            elif event_type == "recovery_started":
+                method = str(event.get("method") or "tent")
+                sleep_seconds = event.get("sleep_seconds")
+                hunger_cost = event.get("estimated_hunger_cost")
+                health_gain = event.get("expected_health_gain")
+                sanity_gain = event.get("expected_sanity_gain")
+                if method == "food":
+                    text = "我有点饿了，先吃些随身食物。"
+                elif method == "healing_item":
+                    text = "我生命偏低，先用背包里的治疗物品。"
+                else:
+                    text = (
+                        "我状态有些低，先去附近帐篷休息。"
+                        f"大约睡 {sleep_seconds} 秒，"
+                        f"预计消耗 {hunger_cost} 点饥饿，"
+                        f"恢复 {health_gain} 点生命和 {sanity_gain} 点精神。"
+                    )
+                self._publish_reply(
+                    {
+                        "text": text,
+                        "expects_response": False,
+                    },
+                    self.arbiter.active().intent_id,
+                    "recovery",
+                )
+            elif event_type == "recovery_completed":
+                method = str(event.get("method") or "tent")
+                if method == "food":
+                    text = f"我吃完东西了，现在饥饿 {event.get('hunger')}。"
+                elif method == "healing_item":
+                    text = f"治疗物品用完了，现在生命 {event.get('health')}。"
+                else:
+                    text = (
+                        "我休息好了。"
+                        f"当前生命 {event.get('health')}，"
+                        f"饥饿 {event.get('hunger')}，"
+                        f"精神 {event.get('sanity')}。"
+                    )
+                self._publish_reply(
+                    {
+                        "text": text,
+                        "expects_response": False,
+                    },
+                    self.arbiter.active().intent_id,
+                    "recovery",
+                )
+            elif event_type == "recovery_unavailable":
+                self._publish_reply(
+                    {
+                        "text": "我想自己恢复，但"
+                        + recovery_unavailable_detail(event)
+                        + "。",
+                        "expects_response": False,
+                    },
+                    self.arbiter.active().intent_id,
+                    "recovery",
                 )
 
     def _record_intent_change(

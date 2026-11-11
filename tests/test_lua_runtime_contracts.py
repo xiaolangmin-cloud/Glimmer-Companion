@@ -171,6 +171,51 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn("MapExplorer:IsTileSeeable", source)
         self.assertIn("player_map_explored_tiles = explored_tiles", source)
 
+    def test_autonomous_recovery_checks_benefit_hunger_danger_and_phase(
+        self,
+    ) -> None:
+        source = (
+            ROOT / "mod" / "scripts" / "brains" / "codex_companion_brain.lua"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("local RECOVERY_MIN_SLEEP_SECONDS = 60", source)
+        self.assertIn("local RECOVERY_EMERGENCY_SLEEP_SECONDS = 30", source)
+        self.assertIn("local RECOVERY_TRAVEL_TIMEOUT_SECONDS = 45", source)
+        self.assertIn("function CodexCompanionBrain:CanUseRecoveryTent", source)
+        self.assertIn("sleepingbag:GetSleepPhase()", source)
+        self.assertIn('clock:GetTimeUntilPhase(wake_phase)', source)
+        self.assertIn("FindNearbyDanger(RECOVERY_DANGER_RADIUS)", source)
+        self.assertIn("FindNearbyDanger(RECOVERY_SLEEP_DANGER_RADIUS)", source)
+        self.assertIn("self.inst:IsNearDanger(self.inst)", source)
+        self.assertIn("TUNING.CALORIES_MED", source)
+        self.assertIn("sleepingbaguser.health_bonus_mult", source)
+        self.assertIn("sleepingbaguser.sanity_bonus_mult", source)
+        self.assertIn("sleepingbaguser.hunger_bonus_mult", source)
+        self.assertIn("expected_health_gain = health_gain", source)
+        self.assertIn("expected_sanity_gain = sanity_gain", source)
+        self.assertIn("estimate.hunger_reserve = reserve", source)
+        self.assertIn('return false, "not_enough_sleep_time", estimate', source)
+        self.assertIn(
+            'return false, "not_enough_recovery_benefit", estimate',
+            source,
+        )
+        self.assertIn(
+            'return false, "not_enough_hunger_for_sleep", estimate',
+            source,
+        )
+        self.assertIn("params.ignore_autonomous_recovery == true", source)
+        self.assertIn('follow_reason == "default_follow"', source)
+        self.assertIn(
+            'follow_reason == "intent_lease_expired_follow"',
+            source,
+        )
+        self.assertIn("components.sleepingbaguser:DoWakeUp()", source)
+        self.assertIn("Keep polling during tent sleep", source)
+        self.assertIn('"recovery_started"', source)
+        self.assertIn('"recovery_completed"', source)
+        self.assertIn('"recovery_unavailable"', source)
+        self.assertIn("fail_on_stuck = false", source)
+
 
 if __name__ == "__main__":
     unittest.main()
