@@ -986,6 +986,116 @@ class CompanionServiceTests(unittest.TestCase):
                 service.stop()
                 service.memory.close()
 
+    def test_native_emergency_events_report_without_waking_model(self) -> None:
+        self.assertFalse(
+            {
+                "emergency_detected",
+                "emergency_action",
+                "emergency_resolved",
+            }
+            & IMPORTANT_EVENTS
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.tick(
+                    {
+                        "companion": {
+                            "prefab": "waxwell",
+                            "emergency": {
+                                "active": True,
+                                "category": "darkness",
+                                "action": "equipped_torch",
+                            },
+                        },
+                        "player": {"guid": "1", "prefab": "waxwell"},
+                        "world": {
+                            "shard": "2",
+                            "is_master": False,
+                            "isacidraining": False,
+                        },
+                        "nearby": [],
+                        "events": [
+                            {
+                                "event_id": "emergency-dark-1",
+                                "type": "emergency_detected",
+                                "category": "darkness",
+                                "severity": "high",
+                                "action": "equipped_torch",
+                            },
+                            {
+                                "event_id": "emergency-quake-1",
+                                "type": "emergency_detected",
+                                "category": "earthquake",
+                                "severity": "high",
+                                "action": "brace",
+                            },
+                            {
+                                "event_id": "emergency-resolved-1",
+                                "type": "emergency_resolved",
+                                "category": "earthquake",
+                                "action": "brace",
+                            },
+                        ],
+                    }
+                )
+                messages = service.state()["messages"]
+                self.assertEqual(len(messages), 3)
+                self.assertIn("周围突然变黑", messages[0]["text"])
+                self.assertIn("点亮火把", messages[0]["text"])
+                self.assertIn("地震", messages[1]["text"])
+                self.assertIn("穿好护甲", messages[1]["text"])
+                self.assertIn("地面安静下来", messages[2]["text"])
+                self.assertTrue(all(item["source"] == "emergency" for item in messages))
+                service.tick(
+                    {
+                        "companion": {"prefab": "waxwell"},
+                        "player": {"guid": "1", "prefab": "waxwell"},
+                        "world": {"shard": "1", "is_master": True},
+                        "nearby": [],
+                        "events": [
+                            {
+                                "event_id": f"emergency-hound-{index}",
+                                "type": "emergency_detected",
+                                "category": "hound_wave",
+                                "severity": "high",
+                                "action": "fight",
+                            }
+                            for index in range(4)
+                        ],
+                    }
+                )
+                hound_lines = [
+                    item["text"]
+                    for item in service.state()["messages"][-4:]
+                ]
+                self.assertEqual(len(set(hound_lines)), 4)
+                self.assertIn("来狗啦来狗啦", hound_lines[0])
+            finally:
+                service.stop()
+                service.memory.close()
+
     def test_recovery_events_report_estimates_without_waking_model(self) -> None:
         self.assertFalse(
             {

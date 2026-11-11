@@ -93,6 +93,13 @@ class AgentMemoryTests(unittest.TestCase):
                 )
                 self.assertIn("启动桥", context)
                 self.assertLessEqual(len(context), 1600)
+                emergency_context = memory.render_implementation_context(
+                    "微光遇到猎犬地震和青蛙雨会怎么应急",
+                    limit=2,
+                    max_chars=1600,
+                )
+                self.assertIn("0.75", emergency_context)
+                self.assertIn("来狗啦来狗啦", emergency_context)
                 self.assertEqual(
                     memory.render_implementation_context("帮我砍几棵树"),
                     "",

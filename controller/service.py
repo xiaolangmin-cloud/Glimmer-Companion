@@ -67,6 +67,265 @@ RECOVERY_REASON_TEXT = {
     "tent_enter_failed": "到达帐篷后仍无法进入睡眠",
 }
 
+EMERGENCY_CATEGORY_TEXT = {
+    "lethal_threat": "下一次受击可能致命",
+    "earthquake": "地震",
+    "hound_wave": "猎犬或洞穴蠕虫来袭",
+    "frog_rain": "青蛙雨",
+    "nightmare_riot": "梦魇暴乱",
+    "attacked": "我们遭到攻击",
+    "hostile_group": "附近出现敌对群体",
+    "quake_warning": "地震预警",
+    "hound_warning": "猎犬或洞穴蠕虫预警",
+    "acid_rain": "酸雨",
+    "darkness": "周围突然变黑",
+    "freezing": "过冷",
+    "overheating": "过热",
+}
+
+EMERGENCY_ACTION_TEXT = {
+    "fight": "我先处理附近的威胁",
+    "rally": "我先向你靠拢",
+    "prepare_rally": "我先做好准备并向你靠拢",
+    "brace": "我先停下、穿好护甲并向你靠拢",
+    "retreat": "我先撤到安全位置",
+    "equipped_torch": "我已经点亮火把",
+    "moving_to_light": "我先走向附近光源",
+    "following_player": "我先向你靠拢寻找光源",
+    "already_lit": "附近已经有光",
+    "equipped_protection": "我已经换上防护装备",
+    "seek_shelter": "我先去附近避雨处",
+    "no_light_available": "我没找到可用光源",
+    "continue_task_override": "你要求继续任务，所以我不中断，但会保留这次高风险选择的记录",
+}
+
+EMERGENCY_DETECTED_LINES = {
+    "lethal_threat": (
+        "呜哇，这一下会把我拍扁！我先溜到你身边！",
+        "不行不行，再挨一下就倒啦，我先撤！",
+        "这次真的疼！我先回你身边缓一缓！",
+        "警报拉满，我先保命，马上贴过来！",
+    ),
+    "earthquake": (
+        "地震啦地震啦，我先穿好护甲贴过去！",
+        "地在晃，石头要掉啦！快让我挨着你！",
+        "轰隆隆的，我先停下躲一躲！",
+        "别站在石头下面呀，微光马上过来！",
+    ),
+    "hound_wave": (
+        "来狗啦来狗啦！我先把近处的坏家伙赶走！",
+        "汪汪军团到门口啦，你先别跑太远！",
+        "好多牙好多尾巴！我贴着你打，不追远！",
+        "猎犬开饭时间到了……骗你的，我先上！",
+    ),
+    "frog_rain": (
+        "天上下青蛙啦，好离谱！我先拍走近处的！",
+        "呱呱军团落下来啦，你别被围住呀！",
+        "青蛙雨来啦！我今天可没带伞，先打！",
+        "满地都在蹦！我守着你身边这一圈！",
+    ),
+    "nightmare_riot": (
+        "影子开始闹腾啦，我先赶走近处的！",
+        "暗处有东西在盯着我们……我先挡着！",
+        "梦魇暴乱啦，别离我太远呀！",
+        "坏影子冒出来啦，微光先把它们戳回去！",
+    ),
+    "attacked": (
+        "有人偷袭！我先还手，你别慌！",
+        "哎哟，谁打我！我先把这家伙赶走！",
+        "挨了一下！我先处理眼前这个坏家伙！",
+        "偷袭警报！微光要凶一下了！",
+    ),
+    "hostile_group": (
+        "前面聚了一群坏家伙，我先挡在你前面！",
+        "好多不友善的家伙！我先处理近处的！",
+        "它们凑过来了，我守着你身边这一圈！",
+        "坏家伙组团啦，我可不会让它们欺负你！",
+    ),
+    "quake_warning": (
+        "好像要地震啦，我先穿甲，马上靠过去！",
+        "地下传来轰隆声……你站到空一点的地方呀！",
+        "石头预警！微光先做好准备！",
+        "地底在咕噜咕噜响，我有种不好的预感！",
+    ),
+    "hound_warning": (
+        "听见狗叫啦，我先穿甲，马上贴过来！",
+        "好像要来狗啦，你别走太远呀！",
+        "远处有爪子挠地声……我先准备一下！",
+        "狗牙警报！微光先靠到你身边！",
+    ),
+    "acid_rain": (
+        "酸雨酸雨！我先找防护，别让衣服化掉！",
+        "天上下酸水啦，快跟我找地方躲！",
+        "嘶……地面都在冒烟，我先换防护装备！",
+        "酸雨来啦！微光先看有没有雨具！",
+    ),
+    "darkness": (
+        "诶？周围突然变黑啦，我先点亮火把！",
+        "伸手不见五指啦，等我亮起来！",
+        "查理的黑暗来啦？我先找光，别乱跑！",
+        "看不见路啦，微光去把灯点上！",
+    ),
+    "freezing": (
+        "冷得牙都在打架啦，我先换保暖装备！",
+        "要冻成冰棍啦！我先找件厚衣服！",
+        "呼……好冷好冷，我往你那边靠一靠！",
+        "手指都不听使唤啦，我先保暖！",
+    ),
+    "overheating": (
+        "热得快要冒烟啦，我先换降温装备！",
+        "太阳好凶！再晒下去要熟啦！",
+        "脑袋晕乎乎的……我先躲一躲热气！",
+        "好烫好烫，微光要先降温！",
+    ),
+}
+
+EMERGENCY_ACTION_LINES = {
+    "fight": (
+        "我先把近处的坏家伙赶走！",
+        "别跑太远，我就在你旁边打！",
+        "这些家伙交给我，你先留意身后！",
+    ),
+    "rally": (
+        "等等我呀，我朝你这边来！",
+        "你先别跑太远，我马上贴过来！",
+        "我回来我回来，别把我落下呀！",
+    ),
+    "prepare_rally": (
+        "我先做好准备，然后马上靠过去！",
+        "给我一秒准备，我这就贴着你！",
+        "先穿好甲，再跟你站一起！",
+    ),
+    "brace": (
+        "我先站稳，石头掉下来也不乱跑！",
+        "缩一下脖子，我先挨到你身边！",
+        "别怕，我先穿好护甲顶一下！",
+    ),
+    "retreat": (
+        "有点危险，我先溜到你身边！",
+        "打不过就先跑，这可不丢脸！",
+        "我先撤，留着力气再来帮你！",
+    ),
+    "equipped_torch": (
+        "火把点亮啦，现在能看见一点点！",
+        "有光啦！跟着我走就好！",
+        "灯亮了，黑暗先退退！",
+    ),
+    "moving_to_light": (
+        "附近有光，我先跑过去！",
+        "我看到亮处啦，马上过去！",
+        "朝灯那边走，黑暗追不上我！",
+    ),
+    "following_player": (
+        "我找不到亮处，先来你身边！",
+        "你有光吗？我先贴着你走！",
+        "哪儿都黑漆漆的，我跟着你！",
+    ),
+    "already_lit": (
+        "原来这里已经有光啦。",
+        "还好还好，这块地方亮着。",
+        "有光就行，我不用再点啦。",
+    ),
+    "equipped_protection": (
+        "防护换好啦，这下舒服多了！",
+        "装备切好，我不怕它！",
+        "这样应该能顶住了。",
+    ),
+    "seek_shelter": (
+        "那边能躲，我先进去！",
+        "我看到避雨处啦，快跟上！",
+        "先躲一下，别让酸雨啃衣服！",
+    ),
+    "no_light_available": (
+        "糟糕，我包里没有能点的东西……先来找你！",
+        "火把没啦！我先贴着你找亮处！",
+        "一点光都没有，我先跟你走！",
+    ),
+    "continue_task_override": (
+        "你说要继续，我就咬牙不中断；风险我会一直盯着！",
+        "好，我硬着头皮接着做，不过会随时报告危险！",
+        "收到，这次高风险也继续，但我会把防护做到最好！",
+    ),
+}
+
+EMERGENCY_RESOLVED_LINES = {
+    "lethal_threat": (
+        "呼……活下来啦，我慢慢贴回来。",
+        "刚才真的好险，现在能喘口气了。",
+        "命保住啦！我先乖乖跟着你。",
+    ),
+    "earthquake": (
+        "地面安静下来啦，我回来啦。",
+        "地震警报解除啦，呼……尾巴都还在吧？",
+        "不晃了不晃了，我去捡捡掉的东西。",
+    ),
+    "hound_wave": (
+        "狗群散啦，呼……牙齿还真多。",
+        "汪汪军团终于走啦，我回来啦。",
+        "耳边清净了，总算不用一直呲牙啦。",
+    ),
+    "frog_rain": (
+        "青蛙雨停啦，满地都是呱呱声的余音。",
+        "终于不往下掉青蛙了……",
+        "蛙群散啦，我先擦擦手。",
+    ),
+    "nightmare_riot": (
+        "影子退下去啦，周围安静了。",
+        "黑暗不闹了，我回来啦。",
+        "那些坏影子散掉啦。",
+    ),
+    "attacked": (
+        "偷袭的家伙走啦，现在安全一点。",
+        "总算清净了，我继续跟着你。",
+        "坏家伙解决啦，我回来啦。",
+    ),
+    "hostile_group": (
+        "那群坏家伙散啦，安全一点了。",
+        "附近清净了，我回来啦。",
+        "不围着我们了，呼。",
+    ),
+    "quake_warning": (
+        "地底不响啦，可能只是虚惊一场。",
+        "轰隆声没啦，我先把肩膀放下来。",
+        "地震预警过去啦，继续走吧。",
+    ),
+    "hound_warning": (
+        "耳朵清静啦，狗狗可能改路啦。",
+        "狗叫声没啦，暂时不用呲牙了。",
+        "爪子声消失啦，呼……虚惊一场。",
+    ),
+    "acid_rain": (
+        "酸雨停啦，衣服应该保住了。",
+        "天空恢复正常啦，不用再躲了。",
+        "酸水停啦，可以出来了。",
+    ),
+    "darkness": (
+        "亮起来啦，刚才那一下真吓人。",
+        "终于看得见路啦。",
+        "黑暗退啦，我继续跟着你。",
+    ),
+    "freezing": (
+        "暖和过来啦，手指又能动啦。",
+        "不那么冷啦，好舒服。",
+        "温度回来啦，我继续跟着你。",
+    ),
+    "overheating": (
+        "终于凉快一点啦。",
+        "没那么烫啦，刚才快熟透了。",
+        "热气退啦，我回来啦。",
+    ),
+}
+
+
+def emergency_category_text(event: dict[str, Any]) -> str:
+    category = str(event.get("category") or "")
+    return EMERGENCY_CATEGORY_TEXT.get(category, "游戏环境危险")
+
+
+def emergency_action_text(event: dict[str, Any]) -> str:
+    action = str(event.get("action") or "")
+    return EMERGENCY_ACTION_TEXT.get(action, "我先按应急规则处理")
+
 
 def recovery_unavailable_detail(event: dict[str, Any]) -> str:
     reason = str(event.get("reason") or "")
@@ -161,6 +420,7 @@ class CompanionService:
         self._cross_world_block_seen: dict[str, float] = {}
         self._agent_memory_closed = False
         self._world_memory_last_scan = 0.0
+        self._emergency_line_counts: dict[tuple[str, str, str], int] = {}
 
     def start(self) -> None:
         if self._thread is not None:
@@ -568,6 +828,51 @@ class CompanionService:
             reply_source,
         )
 
+    def _emergency_announcement(
+        self,
+        event: dict[str, Any],
+        kind: str,
+    ) -> str:
+        category = str(event.get("category") or "")
+        action = str(event.get("action") or "")
+        if kind == "resolved":
+            lines = EMERGENCY_RESOLVED_LINES.get(
+                category,
+                ("危险过去啦，我回来啦。",),
+            )
+            line_key = f"resolved:{category}"
+        elif kind == "action":
+            lines = EMERGENCY_ACTION_LINES.get(action)
+            if not lines:
+                return emergency_action_text(event) + "。"
+            line_key = f"action:{category}:{action}"
+        else:
+            lines = EMERGENCY_DETECTED_LINES.get(
+                category,
+                ("有危险啦！我先按应急规则处理！",),
+            )
+            line_key = f"detected:{category}"
+
+        count_key = (line_key, category, action)
+        count = self._emergency_line_counts.get(count_key, 0)
+        self._emergency_line_counts[count_key] = count + 1
+        text = lines[count % len(lines)]
+        if kind == "detected" and action == "continue_task_override":
+            override_lines = EMERGENCY_ACTION_LINES[
+                "continue_task_override"
+            ]
+            override_key = ("override", category, action)
+            override_count = self._emergency_line_counts.get(
+                override_key,
+                0,
+            )
+            self._emergency_line_counts[override_key] = override_count + 1
+            text += (
+                " "
+                + override_lines[override_count % len(override_lines)]
+            )
+        return text
+
     def _record_snapshot_events(self, snapshot: dict[str, Any]) -> None:
         now = time.monotonic()
         cutoff = now - 300
@@ -591,7 +896,13 @@ class CompanionService:
                 "error"
                 if event_type in {"task_failed", "companion_dead"}
                 else "warning"
-                if event_type in {"task_blocked", "critical_health", "critical_hunger"}
+                if event_type in {
+                    "task_blocked",
+                    "critical_health",
+                    "critical_hunger",
+                    "emergency_detected",
+                    "emergency_action",
+                }
                 else "info"
             )
             messages = {
@@ -607,6 +918,9 @@ class CompanionService:
                 "recovery_started": "微光开始自主恢复状态",
                 "recovery_completed": "微光完成自主恢复",
                 "recovery_unavailable": "微光当前无法安全自主恢复",
+                "emergency_detected": "微光发现环境危险并启动应急处理",
+                "emergency_action": "微光调整了应急处理方式",
+                "emergency_resolved": "微光确认应急危险已经解除",
             }
             message = messages.get(event_type, f"游戏事件：{event_type}")
             if (
@@ -630,6 +944,12 @@ class CompanionService:
                     + recovery_unavailable_detail(event)
                     + "）"
                 )
+            elif event_type == "emergency_detected":
+                message = self._emergency_announcement(event, "detected")
+            elif event_type == "emergency_action":
+                message = self._emergency_announcement(event, "action")
+            elif event_type == "emergency_resolved":
+                message = self._emergency_announcement(event, "resolved")
             elif (
                 event_type == "task_complete"
                 and event.get("mode") == "collect_loot"
@@ -642,7 +962,12 @@ class CompanionService:
                     str(event.get("item_prefab") or "物品"),
                 )
                 message = f"伴侣收集完成：{item_name} {event.get('amount')} 个"
-            if reason and event_type != "recovery_unavailable":
+            if reason and event_type not in {
+                "recovery_unavailable",
+                "emergency_detected",
+                "emergency_action",
+                "emergency_resolved",
+            }:
                 message += f"（{reason}）"
             data = {
                 key: value
@@ -847,6 +1172,33 @@ class CompanionService:
                     },
                     self.arbiter.active().intent_id,
                     "recovery",
+                )
+            elif event_type == "emergency_detected":
+                self._publish_reply(
+                    {
+                        "text": message,
+                        "expects_response": False,
+                    },
+                    self.arbiter.active().intent_id,
+                    "emergency",
+                )
+            elif event_type == "emergency_action":
+                self._publish_reply(
+                    {
+                        "text": message,
+                        "expects_response": False,
+                    },
+                    self.arbiter.active().intent_id,
+                    "emergency",
+                )
+            elif event_type == "emergency_resolved":
+                self._publish_reply(
+                    {
+                        "text": message,
+                        "expects_response": False,
+                    },
+                    self.arbiter.active().intent_id,
+                    "emergency",
                 )
 
     def _record_intent_change(

@@ -237,6 +237,44 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn('"recovery_unavailable"', source)
         self.assertIn("fail_on_stuck = false", source)
 
+    def test_native_emergency_layer_covers_world_hazards_locally(self) -> None:
+        source = (
+            ROOT / "mod" / "scripts" / "brains" / "codex_companion_brain.lua"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("local EMERGENCY_EVALUATE_SECONDS = 0.75", source)
+        self.assertIn("local EMERGENCY_RESOLVE_GRACE_SECONDS = 6", source)
+        self.assertIn("function CodexCompanionBrain:UpdateEmergency", source)
+        self.assertIn("function CodexCompanionBrain:HandleEmergency", source)
+        self.assertIn("function CodexCompanionBrain:CollectEmergencyThreats", source)
+        self.assertIn("function CodexCompanionBrain:TryEmergencyLight", source)
+        self.assertIn("function CodexCompanionBrain:EquipAcidProtection", source)
+        self.assertIn("function CodexCompanionBrain:EquipThermalProtection", source)
+        self.assertIn("function CodexCompanionBrain:EmergencyFightTarget", source)
+        self.assertIn("TheWorld.components.hounded", source)
+        self.assertIn("hounded:GetWarning()", source)
+        self.assertIn("hounded:GetAttacking()", source)
+        self.assertIn("TheWorld.components.quaker", source)
+        self.assertIn("quaker:IsQuaking()", source)
+        self.assertIn('"warnquake"', source)
+        self.assertIn('"startquake"', source)
+        self.assertIn('"endquake"', source)
+        self.assertIn('"nightmarephasechanged"', source)
+        self.assertIn("TheWorld.state.isacidraining", source)
+        self.assertIn('inventory:EquipHasTag("acidrainimmune")', source)
+        self.assertIn("EMERGENCY_WAVE_ENGAGE_RADIUS", source)
+        self.assertIn("EMERGENCY_NIGHTMARE_ENGAGE_RADIUS", source)
+        self.assertIn('category = "frog_rain"', source)
+        self.assertIn('category = "darkness"', source)
+        self.assertIn('category = "earthquake"', source)
+        self.assertIn('category = "nightmare_riot"', source)
+        self.assertIn("GetEmergencySafetyOverride(intent)", source)
+        self.assertIn('"continue_task_override"', source)
+        self.assertIn("emergency_detected", source)
+        self.assertIn("emergency_resolved", source)
+        self.assertIn("self:BuildEmergencySnapshot()", source)
+        self.assertIn("isacidraining = TheWorld.state.isacidraining == true", source)
+
     def test_runtime_character_selection_is_server_side_and_safe(self) -> None:
         modmain = (ROOT / "mod" / "modmain.lua").read_text(encoding="utf-8")
         brain = (

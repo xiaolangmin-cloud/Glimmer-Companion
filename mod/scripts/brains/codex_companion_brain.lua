@@ -24,6 +24,16 @@ local RECOVERY_MIN_HEALTH_GAIN = 12
 local RECOVERY_MIN_SANITY_GAIN = 8
 local RECOVERY_HUNGER_RESERVE_RATIO = 0.12
 local RECOVERY_HUNGER_RESERVE_MIN = 10
+local EMERGENCY_EVALUATE_SECONDS = 0.75
+local EMERGENCY_RESOLVE_GRACE_SECONDS = 6
+local EMERGENCY_NOTICE_COOLDOWN_SECONDS = 30
+local EMERGENCY_ATTACK_MEMORY_SECONDS = 8
+local EMERGENCY_THREAT_RADIUS = 24
+local EMERGENCY_WAVE_ENGAGE_RADIUS = 18
+local EMERGENCY_NIGHTMARE_ENGAGE_RADIUS = 10
+local EMERGENCY_LIGHT_SEARCH_RADIUS = 18
+local EMERGENCY_MAX_THREATS = 16
+local EMERGENCY_HOUND_MEMORY_SECONDS = 120
 local REMOTE_TASK_MODES = {
     move_to = true,
     move_to_landmark = true,
@@ -295,6 +305,18 @@ local CodexCompanionBrain = Class(Brain, function(self, inst)
     self.recovery_state = nil
     self.recovery_next_check = 0
     self.recovery_notice_at = {}
+    self.emergency_next_check = 0
+    self.emergency_state = nil
+    self.emergency_notice_at = {}
+    self.emergency_attack_memory = nil
+    self.emergency_player_listener_target = nil
+    self.emergency_native = {
+        quake_warning = false,
+        quaking = false,
+        quake_started_at = nil,
+        hound_warning_at = nil,
+        nightmare_phase = nil,
+    }
     self.requested_companion_character = nil
 end)
 
@@ -664,6 +686,11 @@ function CodexCompanionBrain:BuildSnapshot(events)
             awake = not self.inst:IsAsleep(),
             safety_retreating = self.safety_retreat_until > GetTime(),
             safety_retreat_reason = self.safety_retreat_reason,
+            sheltered = self.inst.components.sheltered ~= nil
+                and self.inst.components.sheltered.sheltered
+                or false,
+            rain_immune = self.inst.components.rainimmunity ~= nil,
+            emergency = self:BuildEmergencySnapshot(),
             area_radius = tonumber(self.inst._codex_area_radius) or 18,
             route = self.route ~= nil and {
                 intent_id = self.route.intent_id,
@@ -711,6 +738,14 @@ function CodexCompanionBrain:BuildSnapshot(events)
             season = TheWorld.state.season,
             raining = TheWorld.state.israining,
             snowing = TheWorld.state.issnowing,
+            isacidraining = TheWorld.state.isacidraining == true,
+            quake_warning = self.emergency_native.quake_warning,
+            quaking = self.emergency_native.quaking,
+            hound_warning = self.emergency_native.hound_warning_at ~= nil
+                and GetTime() - self.emergency_native.hound_warning_at
+                    <= EMERGENCY_HOUND_MEMORY_SECONDS
+                or false,
+            nightmare_phase = self.emergency_native.nightmare_phase,
             player_map_explored_tiles = explored_tiles,
         },
         inventory = inventory,
@@ -2267,6 +2302,911 @@ function CodexCompanionBrain:FindNearbyDanger(radius)
     )
 end
 
+local function IsEmergencyThreat(entity, companion, player)
+    if entity == nil
+        or entity == companion
+        or not CanBeSeen(entity)
+        or entity.components.health == nil
+        or entity.components.health:IsDead()
+        or entity.components.combat == nil
+    then
+        return false
+    end
+    local combat = entity.components.combat
+    local target = combat.target
+    return target == companion
+        or target == player
+        or entity:HasTag("hound")
+        or entity:HasTag("worm")
+        or entity:HasTag("shadowcreature")
+        or entity:HasTag("nightmarecreature")
+end
+
+local function GetEmergencySafetyOverride(intent)
+    local params = intent ~= nil
+        and type(intent.params) == "table"
+        and intent.params
+        or {}
+    return params.ignore_survival_safety == true
+        or params.survival_policy == "force"
+end
+
+function CodexCompanionBrain:EnsureEmergencyPlayerListener()
+    local player = GetPrimaryPlayer(self.inst)
+    if player == self.emergency_player_listener_target then
+        return
+    end
+    local previous = self.emergency_player_listener_target
+    if previous ~= nil and self.emergency_attacked_listener ~= nil then
+        self.inst:RemoveEventCallback(
+            "attacked",
+            self.emergency_attacked_listener,
+            previous
+        )
+        self.inst:RemoveEventCallback(
+            "houndwarning",
+            self.emergency_hound_warning_listener,
+            previous
+        )
+    end
+    self.emergency_player_listener_target = player
+    if player == nil or not player:IsValid() then
+        return
+    end
+    self.emergency_attacked_listener = function(source, data)
+        local attacker = data ~= nil and data.attacker or nil
+        if attacker == nil
+            or not attacker:IsValid()
+            or attacker == self.inst
+        then
+            return
+        end
+        self.emergency_attack_memory = {
+            attacker = attacker,
+            victim = source,
+            at = GetTime(),
+        }
+    end
+    self.emergency_hound_warning_listener = function()
+        self.emergency_native.hound_warning_at = GetTime()
+    end
+    self.inst:ListenForEvent(
+        "attacked",
+        self.emergency_attacked_listener,
+        player
+    )
+    self.inst:ListenForEvent(
+        "houndwarning",
+        self.emergency_hound_warning_listener,
+        player
+    )
+end
+
+function CodexCompanionBrain:BuildEmergencySnapshot()
+    local state = self.emergency_state
+    if state == nil then
+        return {
+            active = false,
+            quake_warning = self.emergency_native.quake_warning,
+            quaking = self.emergency_native.quaking,
+            hound_warning = self.emergency_native.hound_warning_at ~= nil
+                and GetTime() - self.emergency_native.hound_warning_at
+                    <= EMERGENCY_HOUND_MEMORY_SECONDS
+                or false,
+            nightmare_phase = self.emergency_native.nightmare_phase,
+        }
+    end
+    return {
+        active = true,
+        category = state.category,
+        severity = state.severity,
+        action = state.action,
+        source_prefab = state.source_prefab,
+        threat_count = state.threat_count,
+        started_at = Round(state.started_at or GetTime(), 1),
+        elapsed = Round(GetTime() - (state.started_at or GetTime()), 1),
+        target_guid = state.target_guid,
+        target_prefab = state.target_prefab,
+        player_distance = state.target ~= nil
+            and CanBeSeen(state.target)
+            and Round(self.inst:GetDistanceSqToInst(state.target) ^ 0.5)
+            or nil,
+        quake_warning = self.emergency_native.quake_warning,
+        quaking = self.emergency_native.quaking,
+        hound_warning = self.emergency_native.hound_warning_at ~= nil
+            and GetTime() - self.emergency_native.hound_warning_at
+                <= EMERGENCY_HOUND_MEMORY_SECONDS
+            or false,
+        nightmare_phase = self.emergency_native.nightmare_phase,
+    }
+end
+
+function CodexCompanionBrain:CollectEmergencyThreats(radius)
+    local player = GetPrimaryPlayer(self.inst)
+    local x, _, z = self.inst.Transform:GetWorldPosition()
+    local entities = TheSim:FindEntities(
+        x,
+        0,
+        z,
+        radius or EMERGENCY_THREAT_RADIUS,
+        nil,
+        { "INLIMBO", "NOCLICK", "CLASSIFIED", "FX" }
+    )
+    local threats = {}
+    for _, entity in ipairs(entities) do
+        if IsEmergencyThreat(entity, self.inst, player) then
+            table.insert(threats, {
+                entity = entity,
+                distance_sq = self.inst:GetDistanceSqToInst(entity),
+            })
+        end
+    end
+    table.sort(threats, function(a, b)
+        return a.distance_sq < b.distance_sq
+    end)
+    while #threats > EMERGENCY_MAX_THREATS do
+        table.remove(threats)
+    end
+    return threats
+end
+
+function CodexCompanionBrain:IsAcidProtected()
+    if self.inst.components.rainimmunity ~= nil
+        or (
+            self.inst.components.sheltered ~= nil
+            and self.inst.components.sheltered.sheltered
+        )
+    then
+        return true
+    end
+    local inventory = self.inst.components.inventory
+    if inventory == nil then
+        return false
+    end
+    if type(inventory.EquipHasTag) == "function"
+        and inventory:EquipHasTag("acidrainimmune")
+    then
+        return true
+    end
+    for _, item in pairs(inventory.equipslots) do
+        if item:HasTag("acidrainimmune") then
+            return true
+        end
+        local waterproofer = item.components.waterproofer
+        if waterproofer ~= nil
+            and type(waterproofer.GetEffectiveness) == "function"
+            and (waterproofer:GetEffectiveness() or 0) > 0
+        then
+            return true
+        end
+    end
+    return false
+end
+
+function CodexCompanionBrain:EquipBestArmor()
+    local inventory = self.inst.components.inventory
+    if inventory == nil then
+        return false
+    end
+    local best = nil
+    local best_score = 0
+    for _, item in pairs(inventory.itemslots) do
+        local armor = item.components.armor
+        if armor ~= nil and item.components.equippable ~= nil then
+            local percent = armor.maxcondition ~= nil
+                and armor.maxcondition > 0
+                and (armor.condition or armor.maxcondition) / armor.maxcondition
+                or 1
+            local score = (armor.absorb_percent or 0) * percent
+            if score > best_score then
+                best = item
+                best_score = score
+            end
+        end
+    end
+    if best == nil then
+        return false
+    end
+    local slot = best.components.equippable.equipslot
+    if inventory:GetEquippedItem(slot) ~= best then
+        inventory:Equip(best)
+    end
+    return inventory:GetEquippedItem(slot) == best
+end
+
+function CodexCompanionBrain:EquipAcidProtection()
+    if self:IsAcidProtected() then
+        return true
+    end
+    local inventory = self.inst.components.inventory
+    if inventory == nil then
+        return false
+    end
+    local best = nil
+    local best_score = 0
+    for _, item in pairs(inventory.itemslots) do
+        if item.components.equippable ~= nil then
+            local score = item:HasTag("acidrainimmune") and 100 or 0
+            local waterproofer = item.components.waterproofer
+            if waterproofer ~= nil
+                and type(waterproofer.GetEffectiveness) == "function"
+            then
+                score = math.max(
+                    score,
+                    waterproofer:GetEffectiveness() or 0
+                )
+            end
+            if score > best_score then
+                best = item
+                best_score = score
+            end
+        end
+    end
+    if best == nil then
+        return false
+    end
+    inventory:Equip(best)
+    return self:IsAcidProtected()
+end
+
+function CodexCompanionBrain:EquipThermalProtection(freezing)
+    local inventory = self.inst.components.inventory
+    if inventory == nil then
+        return false
+    end
+    local wanted_type = freezing and SEASONS.WINTER or SEASONS.SUMMER
+    local best = nil
+    local best_score = 0
+    for _, item in pairs(inventory.itemslots) do
+        local insulator = item.components.insulator
+        if insulator ~= nil and item.components.equippable ~= nil then
+            local value, insulation_type = insulator:GetInsulation()
+            if insulation_type == wanted_type and (value or 0) > best_score then
+                best = item
+                best_score = value
+            end
+        end
+    end
+    if best == nil then
+        return false
+    end
+    inventory:Equip(best)
+    return true
+end
+
+function CodexCompanionBrain:FindEmergencyLight()
+    local x, _, z = self.inst.Transform:GetWorldPosition()
+    local entities = TheSim:FindEntities(
+        x,
+        0,
+        z,
+        EMERGENCY_LIGHT_SEARCH_RADIUS,
+        nil,
+        { "INLIMBO", "NOCLICK", "CLASSIFIED", "FX" }
+    )
+    local best = nil
+    local best_distance = math.huge
+    for _, entity in ipairs(entities) do
+        local light = entity ~= self.inst and entity.Light or nil
+        local enabled = light ~= nil
+            and (
+                type(light.IsEnabled) ~= "function"
+                or light:IsEnabled()
+            )
+        local radius = enabled
+            and type(light.GetCalculatedRadius) == "function"
+            and (light:GetCalculatedRadius() or 0)
+            or 0
+        if enabled and radius > 0 then
+            local distance = self.inst:GetDistanceSqToInst(entity)
+            if distance < best_distance then
+                best = entity
+                best_distance = distance
+            end
+        end
+    end
+    return best
+end
+
+function CodexCompanionBrain:EmergencyFollowPlayer(force)
+    local player = GetPrimaryPlayer(self.inst)
+    if player == nil or not player:IsValid() then
+        return false
+    end
+    local locomotor = self.inst.components.locomotor
+    if force then
+        if self.inst.components.combat ~= nil then
+            self.inst.components.combat:SetTarget(nil)
+        end
+        self:ClearCombatTarget()
+        if locomotor ~= nil then
+            locomotor:Stop()
+        end
+    end
+    if locomotor ~= nil and self.inst:GetDistanceSqToInst(player) > 16 then
+        if force or not locomotor:HasDestination() then
+            locomotor:GoToEntity(player, nil, 2)
+        end
+    elseif force and locomotor ~= nil then
+        locomotor:Stop()
+    end
+    return true
+end
+
+function CodexCompanionBrain:EmergencyRally(state, extra)
+    local force = state.action == "fight"
+    self:EquipBestArmor()
+    self:SetEmergencyAction(state, "rally", extra)
+    self:EmergencyFollowPlayer(force)
+end
+
+function CodexCompanionBrain:TryEmergencyLight()
+    local light_watcher = self.inst.LightWatcher
+    if light_watcher ~= nil and light_watcher:IsInLight() then
+        return "already_lit"
+    end
+    local inventory = self.inst.components.inventory
+    if inventory ~= nil then
+        for _, item in pairs(inventory.itemslots) do
+            if item.prefab == "torch"
+                and (
+                    item.components.fueled == nil
+                    or not item.components.fueled:IsEmpty()
+                )
+            then
+                inventory:Equip(item)
+                return "equipped_torch"
+            end
+        end
+    end
+    local light = self:FindEmergencyLight()
+    if light ~= nil then
+        local x, _, z = light.Transform:GetWorldPosition()
+        self:MoveDirect(x, z)
+        return "moving_to_light"
+    end
+    if self:EmergencyFollowPlayer() then
+        return "following_player"
+    end
+    return "no_light_available"
+end
+
+function CodexCompanionBrain:FindEmergencyShelter()
+    local x, _, z = self.inst.Transform:GetWorldPosition()
+    local entities = TheSim:FindEntities(
+        x,
+        0,
+        z,
+        24,
+        { "shelter" },
+        { "INLIMBO", "NOCLICK", "CLASSIFIED", "FX", "burnt" }
+    )
+    local best = nil
+    local best_distance = math.huge
+    for _, entity in ipairs(entities) do
+        local distance = self.inst:GetDistanceSqToInst(entity)
+        if distance < best_distance then
+            best = entity
+            best_distance = distance
+        end
+    end
+    return best
+end
+
+function CodexCompanionBrain:EmergencyRetreat(reason, target)
+    local player = GetPrimaryPlayer(self.inst)
+    self.safety_retreat_until = GetTime() + 10
+    self.safety_retreat_reason = reason
+    if self.inst.components.combat ~= nil then
+        self.inst.components.combat:SetTarget(nil)
+    end
+    self.inst:ClearBufferedAction()
+    if player ~= nil
+        and player:IsValid()
+        and self.inst.components.locomotor ~= nil
+    then
+        self.inst.components.locomotor:Stop()
+        self.inst.components.locomotor:GoToEntity(player, nil, 3)
+    end
+    local state = self.emergency_state
+    if state ~= nil then
+        state.target = target
+        state.target_guid = target ~= nil and tostring(target.GUID) or nil
+        state.target_prefab = target ~= nil and target.prefab or nil
+        self:SetEmergencyAction(state, "retreat", {
+            reason = reason,
+        })
+    end
+end
+
+function CodexCompanionBrain:EmergencyFightTarget(state, target, params)
+    if target == nil
+        or not target:IsValid()
+        or target.components.health == nil
+        or target.components.health:IsDead()
+    then
+        return false
+    end
+    local health = self.inst.components.health
+    local current_health = health ~= nil and health.currenthealth or nil
+    local incoming_damage = EstimateIncomingDamage(target, self.inst)
+    local retreat_allowed = params == nil
+        or (
+            params.retreat_on_lethal ~= false
+            and params.retreat_policy ~= "never"
+            and not params.fight_to_death
+        )
+    if retreat_allowed
+        and current_health ~= nil
+        and incoming_damage ~= nil
+        and current_health <= incoming_damage
+    then
+        self:EmergencyRetreat("lethal_next_hit", target)
+        return true
+    end
+
+    local player = GetPrimaryPlayer(self.inst)
+    if player ~= nil and player:IsValid() then
+        local player_distance = self.inst:GetDistanceSqToInst(player) ^ 0.5
+        local target_player_distance =
+            player:GetDistanceSqToInst(target) ^ 0.5
+        if target_player_distance > EMERGENCY_WAVE_ENGAGE_RADIUS + 8
+            and target_player_distance > player_distance
+        then
+            self:EmergencyRally(state, {
+                reason = "wave_target_too_far_from_player",
+            })
+            return true
+        end
+    end
+
+    local combat = self.inst.components.combat
+    local locomotor = self.inst.components.locomotor
+    if combat == nil or locomotor == nil then
+        return false
+    end
+    self:EnsureCombatEquipment(target)
+    combat:SetTarget(target)
+    state.target = target
+    state.target_guid = tostring(target.GUID)
+    state.target_prefab = target.prefab
+    self:SetEmergencyAction(state, "fight")
+    local distance_sq = self.inst:GetDistanceSqToInst(target)
+    local attack_range_sq = combat:CalcAttackRangeSq(target)
+    local busy = self.inst.sg ~= nil
+        and (
+            self.inst.sg:HasStateTag("busy")
+            or self.inst.sg:HasStateTag("attack")
+        )
+    if distance_sq > attack_range_sq then
+        if not locomotor:HasDestination() then
+            locomotor:GoToEntity(target, nil, 2)
+        end
+    elseif combat:CanAttack(target)
+        and not busy
+        and self.inst:GetBufferedAction() == nil
+    then
+        self.inst:ClearBufferedAction()
+        locomotor:PushAction(
+            BufferedAction(self.inst, target, ACTIONS.ATTACK),
+            true
+        )
+    end
+    return true
+end
+
+function CodexCompanionBrain:SetEmergencyAction(state, action, extra)
+    if state.action == action then
+        return
+    end
+    local previous = state.action
+    state.action = action
+    if previous ~= nil then
+        local key = tostring(state.category) .. ":" .. tostring(action)
+        local now = GetTime()
+        if now - (self.emergency_notice_at[key] or -math.huge)
+            < EMERGENCY_NOTICE_COOLDOWN_SECONDS
+        then
+            return
+        end
+        self.emergency_notice_at[key] = now
+        self:QueueEvent("emergency_action", {
+            category = state.category,
+            severity = state.severity,
+            action = action,
+            previous_action = previous,
+            threat_count = state.threat_count,
+            target_guid = state.target_guid,
+            target_prefab = state.target_prefab,
+            reason = extra ~= nil and extra.reason or nil,
+        })
+    end
+end
+
+function CodexCompanionBrain:NotifyEmergency(state)
+    if state.notice_sent then
+        return
+    end
+    state.notice_sent = true
+    self.emergency_notice_at[state.category] = GetTime()
+    self:QueueEvent("emergency_detected", {
+        category = state.category,
+        severity = state.severity,
+        action = state.action,
+        threat_count = state.threat_count,
+        source_prefab = state.source_prefab,
+        target_guid = state.target_guid,
+        target_prefab = state.target_prefab,
+        health_percent = state.health_percent,
+        hunger_percent = state.hunger_percent,
+        sanity_percent = state.sanity_percent,
+        in_light = state.in_light,
+        acid_rain = state.acid_rain,
+        quaking = state.quaking,
+        quake_warning = state.quake_warning,
+        hound_warning = state.hound_warning,
+        hound_attacking = state.hound_attacking,
+        nightmare_phase = state.nightmare_phase,
+        force_task_override = state.force_task_override,
+    })
+end
+
+function CodexCompanionBrain:EvaluateEmergencyState(intent)
+    local now = GetTime()
+    local player = GetPrimaryPlayer(self.inst)
+    local threats = self:CollectEmergencyThreats()
+    local attack = self.emergency_attack_memory
+    if attack ~= nil
+        and (
+            attack.attacker == nil
+            or not attack.attacker:IsValid()
+            or now - attack.at > EMERGENCY_ATTACK_MEMORY_SECONDS
+        )
+    then
+        self.emergency_attack_memory = nil
+        attack = nil
+    end
+
+    local health = self.inst.components.health
+    local hunger = self.inst.components.hunger
+    local sanity = self.inst.components.sanity
+    local health_percent = health ~= nil and health.maxhealth > 0
+        and health.currenthealth / health.maxhealth
+        or 1
+    local hunger_percent = hunger ~= nil and hunger.max > 0
+        and hunger.current / hunger.max
+        or 1
+    local sanity_percent = sanity ~= nil and sanity.max > 0
+        and sanity.current / sanity.max
+        or 1
+    local in_light = self.inst.LightWatcher == nil
+        or self.inst.LightWatcher:IsInLight()
+    local quaker = TheWorld.components.quaker
+    local quaking = self.emergency_native.quaking
+        or (
+            quaker ~= nil
+            and type(quaker.IsQuaking) == "function"
+            and quaker:IsQuaking()
+        )
+    local quake_warning = self.emergency_native.quake_warning and not quaking
+    local hounded = TheWorld.components.hounded
+    local hound_warning = (
+        hounded ~= nil
+        and type(hounded.GetWarning) == "function"
+        and hounded:GetWarning()
+    ) or (
+        self.emergency_native.hound_warning_at ~= nil
+        and now - self.emergency_native.hound_warning_at
+            <= EMERGENCY_HOUND_MEMORY_SECONDS
+    )
+    local hound_attacking = hounded ~= nil
+        and type(hounded.GetAttacking) == "function"
+        and hounded:GetAttacking()
+    local acid_rain = TheWorld.state.isacidraining == true
+    local acid_protected = self:IsAcidProtected()
+    local nightmare_phase = self.emergency_native.nightmare_phase
+
+    local hound_count = 0
+    local frog_count = 0
+    local shadow_count = 0
+    for _, threat in ipairs(threats) do
+        local entity = threat.entity
+        if entity:HasTag("hound") or entity:HasTag("worm") then
+            hound_count = hound_count + 1
+        end
+        if entity:HasTag("frog") then
+            frog_count = frog_count + 1
+        end
+        if entity:HasTag("shadowcreature")
+            or entity:HasTag("nightmarecreature")
+        then
+            shadow_count = shadow_count + 1
+        end
+    end
+
+    local params = intent ~= nil
+        and type(intent.params) == "table"
+        and intent.params
+        or {}
+    local safety_override = GetEmergencySafetyOverride(intent)
+    local lethal_allowed = not safety_override
+        and params.retreat_on_lethal ~= false
+        and params.retreat_policy ~= "never"
+        and not params.fight_to_death
+    local lethal_target = attack ~= nil and attack.attacker or nil
+    if lethal_target == nil or not lethal_target:IsValid() then
+        lethal_target = threats[1] ~= nil and threats[1].entity or nil
+    end
+    local incoming_damage = lethal_target ~= nil
+        and EstimateIncomingDamage(lethal_target, self.inst)
+        or nil
+
+    local state = nil
+    local first_threat = threats[1] ~= nil and threats[1].entity or nil
+    if lethal_allowed
+        and health ~= nil
+        and incoming_damage ~= nil
+        and health.currenthealth <= incoming_damage
+    then
+        state = {
+            category = "lethal_threat",
+            severity = "critical",
+            threat_count = #threats,
+            source_prefab = lethal_target.prefab,
+            target_prefab = lethal_target.prefab,
+        }
+    elseif quaking then
+        state = {
+            category = "earthquake",
+            severity = "high",
+            threat_count = #threats,
+        }
+    elseif hound_attacking or (hound_warning and hound_count > 0) then
+        state = {
+            category = "hound_wave",
+            severity = "high",
+            threat_count = #threats,
+            source_prefab = hound_count > 0 and threats[1].entity.prefab or nil,
+            target_prefab = hound_count > 0 and threats[1].entity.prefab or nil,
+        }
+    elseif frog_count >= 2 then
+        state = {
+            category = "frog_rain",
+            severity = "high",
+            threat_count = #threats,
+            source_prefab = "frog",
+        }
+    elseif shadow_count > 0
+        and (
+            sanity_percent < 0.35
+            or nightmare_phase == "wild"
+            or nightmare_phase == "warn"
+        )
+    then
+        state = {
+            category = "nightmare_riot",
+            severity = "high",
+            threat_count = #threats,
+            source_prefab = threats[1].entity.prefab,
+        }
+    elseif attack ~= nil then
+        state = {
+            category = "attacked",
+            severity = "high",
+            threat_count = #threats,
+            source_prefab = attack.attacker ~= nil
+                and attack.attacker.prefab
+                or (first_threat ~= nil and first_threat.prefab or nil),
+        }
+    elseif #threats >= 2 then
+        state = {
+            category = "hostile_group",
+            severity = "high",
+            threat_count = #threats,
+            source_prefab = first_threat.prefab,
+        }
+    elseif quake_warning then
+        state = {
+            category = "quake_warning",
+            severity = "medium",
+            threat_count = #threats,
+        }
+    elseif hound_warning then
+        state = {
+            category = "hound_warning",
+            severity = "medium",
+            threat_count = #threats,
+        }
+    elseif acid_rain and not acid_protected then
+        state = {
+            category = "acid_rain",
+            severity = "medium",
+            threat_count = #threats,
+        }
+    elseif not in_light then
+        state = {
+            category = "darkness",
+            severity = "high",
+            threat_count = #threats,
+        }
+    elseif self.inst:IsFreezing() then
+        state = {
+            category = "freezing",
+            severity = "high",
+            threat_count = #threats,
+        }
+    elseif self.inst:IsOverheating() then
+        state = {
+            category = "overheating",
+            severity = "high",
+            threat_count = #threats,
+        }
+    end
+
+    if state ~= nil then
+        state.health_percent = Round(health_percent * 100)
+        state.hunger_percent = Round(hunger_percent * 100)
+        state.sanity_percent = Round(sanity_percent * 100)
+        state.in_light = in_light
+        state.acid_rain = acid_rain
+        state.quaking = quaking
+        state.quake_warning = quake_warning
+        state.hound_warning = hound_warning
+        state.hound_attacking = hound_attacking
+        state.nightmare_phase = nightmare_phase
+        state.force_task_override = safety_override
+        state.threats = threats
+        state.target = nil
+        state.target_guid = nil
+        state.target_prefab = state.target_prefab
+        state.first_seen_at = now
+        state.last_seen_at = now
+        state.notice_sent = false
+    end
+    return state, player
+end
+
+function CodexCompanionBrain:UpdateEmergency(intent)
+    local now = GetTime()
+    self:EnsureEmergencyPlayerListener()
+    if now < self.emergency_next_check then
+        return self.emergency_state
+    end
+    self.emergency_next_check = now + EMERGENCY_EVALUATE_SECONDS
+
+    local detected, player = self:EvaluateEmergencyState(intent)
+    local current = self.emergency_state
+    if detected ~= nil then
+        if current ~= nil and current.category == detected.category then
+            detected.started_at = current.started_at
+            detected.action = current.action
+            detected.notice_sent = current.notice_sent
+        else
+            detected.started_at = now
+            detected.action = nil
+            if not detected.force_task_override then
+                if self.inst.sleepingbag ~= nil
+                    and self.inst.components.sleepingbaguser ~= nil
+                then
+                    self.inst.components.sleepingbaguser:DoWakeUp()
+                end
+                self.recovery_state = nil
+                self:StopAll()
+            end
+        end
+        self.emergency_state = detected
+    elseif current ~= nil then
+        current.last_seen_at = current.last_seen_at or now
+        if now - current.last_seen_at >= EMERGENCY_RESOLVE_GRACE_SECONDS then
+            self:QueueEvent("emergency_resolved", {
+                category = current.category,
+                action = current.action,
+                duration = Round(now - (current.started_at or now), 1),
+            })
+            self.emergency_state = nil
+        end
+    end
+    return self.emergency_state
+end
+
+function CodexCompanionBrain:HandleEmergency(state, intent)
+    if state == nil then
+        return false
+    end
+    local params = intent ~= nil
+        and type(intent.params) == "table"
+        and intent.params
+        or {}
+    local safety_override = GetEmergencySafetyOverride(intent)
+    if safety_override then
+        self:SetEmergencyAction(state, "continue_task_override")
+        self:NotifyEmergency(state)
+        return false
+    end
+
+    local category = state.category
+    local threats = state.threats or {}
+    if category == "lethal_threat" then
+        local target = threats[1] ~= nil and threats[1].entity or nil
+        self:EmergencyRetreat("lethal_next_hit", target)
+    elseif category == "earthquake" or category == "quake_warning" then
+        self:EquipBestArmor()
+        self:SetEmergencyAction(
+            state,
+            category == "earthquake" and "brace" or "prepare_rally"
+        )
+        self:EmergencyFollowPlayer()
+    elseif category == "hound_warning" then
+        self:EquipBestArmor()
+        self:SetEmergencyAction(state, "prepare_rally")
+        self:EmergencyFollowPlayer()
+    elseif category == "hound_wave"
+        or category == "frog_rain"
+        or category == "hostile_group"
+    then
+        local target = threats[1] ~= nil and threats[1].entity or nil
+        if target ~= nil
+            and self.inst:GetDistanceSqToInst(target)
+                <= EMERGENCY_WAVE_ENGAGE_RADIUS ^ 2
+        then
+            if not self:EmergencyFightTarget(state, target, params) then
+                self:EmergencyRally(state)
+            end
+        else
+            self:EmergencyRally(state)
+        end
+    elseif category == "nightmare_riot" then
+        local target = threats[1] ~= nil and threats[1].entity or nil
+        if target ~= nil
+            and self.inst:GetDistanceSqToInst(target)
+                <= EMERGENCY_NIGHTMARE_ENGAGE_RADIUS ^ 2
+        then
+            if not self:EmergencyFightTarget(state, target, params) then
+                self:EmergencyRally(state)
+            end
+        else
+            self:EmergencyRally(state)
+        end
+    elseif category == "attacked" then
+        local target = threats[1] ~= nil and threats[1].entity or nil
+        if target ~= nil then
+            self:EmergencyFightTarget(state, target, params)
+        else
+            self:EmergencyRally(state)
+        end
+    elseif category == "acid_rain" then
+        if self:EquipAcidProtection() then
+            self:SetEmergencyAction(state, "equipped_protection")
+        else
+            local shelter = self:FindEmergencyShelter()
+            if shelter ~= nil then
+                local x, _, z = shelter.Transform:GetWorldPosition()
+                self:MoveDirect(x, z)
+                self:SetEmergencyAction(state, "seek_shelter", {
+                    reason = "no_acid_protection",
+                })
+            else
+                self:EmergencyRally(state, {
+                    reason = "no_acid_protection",
+                })
+            end
+        end
+    elseif category == "darkness" then
+        local action = self:TryEmergencyLight()
+        self:SetEmergencyAction(state, action)
+    elseif category == "freezing" or category == "overheating" then
+        if self:EquipThermalProtection(category == "freezing") then
+            self:SetEmergencyAction(state, "equipped_protection")
+        else
+            self:EmergencyRally(state)
+        end
+    else
+        self:EmergencyRally(state)
+    end
+    self:NotifyEmergency(state)
+    return true
+end
+
 function CodexCompanionBrain:CanUseRecoveryTent(tent)
     if tent == nil or not tent:IsValid() or tent.components.sleepingbag == nil then
         return false, "sleepingbag_missing"
@@ -3400,6 +4340,7 @@ function CodexCompanionBrain:Act()
     if not self.inst:IsValid() then
         return
     end
+    local intent = self:GetActiveIntent()
     if self.safety_retreat_until > GetTime() then
         self:Follow()
         return
@@ -3407,7 +4348,10 @@ function CodexCompanionBrain:Act()
         self.safety_retreat_until = 0
         self.safety_retreat_reason = nil
     end
-    local intent = self:GetActiveIntent()
+    local emergency = self:UpdateEmergency(intent)
+    if self:HandleEmergency(emergency, intent) then
+        return
+    end
     if self:UpdateRecovery(intent) then
         return
     end
@@ -3587,6 +4531,67 @@ function CodexCompanionBrain:OnStart()
         end
     end
     self.inst:ListenForEvent("death", self.death_listener)
+    self.emergency_self_attacked_listener = function(_, data)
+        local attacker = data ~= nil and data.attacker or nil
+        if attacker == nil
+            or not attacker:IsValid()
+            or attacker == self.inst
+        then
+            return
+        end
+        self.emergency_attack_memory = {
+            attacker = attacker,
+            victim = self.inst,
+            at = GetTime(),
+        }
+    end
+    self.inst:ListenForEvent(
+        "attacked",
+        self.emergency_self_attacked_listener
+    )
+    self.emergency_quake_warning_listener = function()
+        self.emergency_native.quake_warning = true
+        self.emergency_native.quaking = false
+    end
+    self.emergency_quake_start_listener = function(_, data)
+        self.emergency_native.quake_warning = false
+        self.emergency_native.quaking = true
+        self.emergency_native.quake_started_at = GetTime()
+        self.emergency_native.quake_duration = data ~= nil
+            and data.duration
+            or nil
+    end
+    self.emergency_quake_end_listener = function()
+        self.emergency_native.quake_warning = false
+        self.emergency_native.quaking = false
+        self.emergency_native.quake_started_at = nil
+        self.emergency_native.quake_duration = nil
+    end
+    self.emergency_nightmare_phase_listener = function(_, phase)
+        self.emergency_native.nightmare_phase =
+            type(phase) == "table" and phase.phase or phase
+    end
+    self.inst:ListenForEvent(
+        "warnquake",
+        self.emergency_quake_warning_listener,
+        TheWorld
+    )
+    self.inst:ListenForEvent(
+        "startquake",
+        self.emergency_quake_start_listener,
+        TheWorld
+    )
+    self.inst:ListenForEvent(
+        "endquake",
+        self.emergency_quake_end_listener,
+        TheWorld
+    )
+    self.inst:ListenForEvent(
+        "nightmarephasechanged",
+        self.emergency_nightmare_phase_listener,
+        TheWorld
+    )
+    self:EnsureEmergencyPlayerListener()
     self.network_task = self.inst:DoPeriodicTask(NETWORK_INTERVAL, function()
         self:NetworkTick()
     end, 0)
@@ -3609,6 +4614,58 @@ function CodexCompanionBrain:OnStop()
     if self.death_listener ~= nil then
         self.inst:RemoveEventCallback("death", self.death_listener)
         self.death_listener = nil
+    end
+    if self.emergency_self_attacked_listener ~= nil then
+        self.inst:RemoveEventCallback(
+            "attacked",
+            self.emergency_self_attacked_listener
+        )
+        self.emergency_self_attacked_listener = nil
+    end
+    if self.emergency_quake_warning_listener ~= nil then
+        self.inst:RemoveEventCallback(
+            "warnquake",
+            self.emergency_quake_warning_listener,
+            TheWorld
+        )
+    end
+    if self.emergency_quake_start_listener ~= nil then
+        self.inst:RemoveEventCallback(
+            "startquake",
+            self.emergency_quake_start_listener,
+            TheWorld
+        )
+    end
+    if self.emergency_quake_end_listener ~= nil then
+        self.inst:RemoveEventCallback(
+            "endquake",
+            self.emergency_quake_end_listener,
+            TheWorld
+        )
+    end
+    if self.emergency_nightmare_phase_listener ~= nil then
+        self.inst:RemoveEventCallback(
+            "nightmarephasechanged",
+            self.emergency_nightmare_phase_listener,
+            TheWorld
+        )
+    end
+    if self.emergency_player_listener_target ~= nil then
+        if self.emergency_attacked_listener ~= nil then
+            self.inst:RemoveEventCallback(
+                "attacked",
+                self.emergency_attacked_listener,
+                self.emergency_player_listener_target
+            )
+        end
+        if self.emergency_hound_warning_listener ~= nil then
+            self.inst:RemoveEventCallback(
+                "houndwarning",
+                self.emergency_hound_warning_listener,
+                self.emergency_player_listener_target
+            )
+        end
+        self.emergency_player_listener_target = nil
     end
     if self.network_task ~= nil then
         self.network_task:Cancel()
