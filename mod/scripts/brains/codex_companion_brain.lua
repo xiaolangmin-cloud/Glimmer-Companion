@@ -10,6 +10,7 @@ local DEFAULT_COMBAT_LEASH_DISTANCE = 30
 local CAPABILITY_CACHE_SECONDS = 5
 local MAX_CRAFTABLE_RECIPES = 60
 local COMBAT_STUCK_SECONDS = 25
+local CRAFT_ACTION_TIMEOUT_SECONDS = 10
 local MAX_KNOWN_RECIPES = 1000
 local RECOVERY_CHECK_SECONDS = 60
 local RECOVERY_NOTICE_COOLDOWN_SECONDS = 120
@@ -1226,6 +1227,22 @@ function CodexCompanionBrain:CraftItem(intent)
         self:FailAction(intent, "builder_missing")
         return
     end
+    if self.craft_state ~= nil
+        and tostring(self.craft_state.intent_id) == tostring(intent.intent_id)
+    then
+        if GetTime() - (self.craft_state.started_at or GetTime())
+            > CRAFT_ACTION_TIMEOUT_SECONDS
+        then
+            self.craft_state = nil
+            self:FailAction(intent, "craft_timeout")
+        end
+        return
+    end
+    if self.craft_state ~= nil
+        and tostring(self.craft_state.intent_id) ~= tostring(intent.intent_id)
+    then
+        self.craft_state = nil
+    end
     if not builder:KnowsRecipe(recipe) then
         self:FailAction(intent, "recipe_not_known")
         return
@@ -1235,12 +1252,22 @@ function CodexCompanionBrain:CraftItem(intent)
         return
     end
 
+    self.craft_state = {
+        intent_id = intent.intent_id,
+        started_at = GetTime(),
+    }
     local started = builder:MakeRecipe(
         recipe,
         self.inst:GetPosition(),
         nil,
         nil,
         function()
+            if self.craft_state ~= nil
+                and tostring(self.craft_state.intent_id)
+                    == tostring(intent.intent_id)
+            then
+                self.craft_state = nil
+            end
             if self.intent ~= nil
                 and tostring(self.intent.intent_id) == tostring(intent.intent_id)
             then
@@ -1257,6 +1284,7 @@ function CodexCompanionBrain:CraftItem(intent)
         end
     )
     if not started then
+        self.craft_state = nil
         self:FailAction(intent, "craft_start_failed")
     end
 end
@@ -1312,24 +1340,52 @@ function CodexCompanionBrain:BuildAt(intent)
         self:FailAction(intent, "builder_missing")
         return
     end
-    if not builder:KnowsRecipe(recipe) then
-        self:FailAction(intent, "recipe_not_known")
+    if self.build_state ~= nil
+        and tostring(self.build_state.intent_id) == tostring(intent.intent_id)
+        and self.build_state.stage == "crafting"
+    then
+        if GetTime() - (self.build_state.started_at or GetTime())
+            > CRAFT_ACTION_TIMEOUT_SECONDS
+        then
+            self.build_state = nil
+            self:FailAction(intent, "build_craft_timeout")
+        end
         return
     end
-    if not builder:HasIngredients(recipe) then
-        self:FailAction(intent, "ingredients_missing")
+    if self.build_state ~= nil
+        and tostring(self.build_state.intent_id) ~= tostring(intent.intent_id)
+    then
+        self.build_state = nil
+    end
+    if not builder:KnowsRecipe(recipe) then
+        self:FailAction(intent, "recipe_not_known")
         return
     end
 
     local position = self:GetActionPosition(intent)
         or self.inst:GetPosition()
     if recipe.placer == nil then
+        if not builder:HasIngredients(recipe) then
+            self:FailAction(intent, "ingredients_missing")
+            return
+        end
+        self.build_state = {
+            intent_id = intent.intent_id,
+            stage = "crafting",
+            started_at = GetTime(),
+        }
         local started = builder:MakeRecipe(
             recipe,
             position,
             nil,
             nil,
             function()
+                if self.build_state ~= nil
+                    and tostring(self.build_state.intent_id)
+                        == tostring(intent.intent_id)
+                then
+                    self.build_state = nil
+                end
                 if self.intent ~= nil
                     and tostring(self.intent.intent_id) == tostring(intent.intent_id)
                 then
@@ -1347,6 +1403,7 @@ function CodexCompanionBrain:BuildAt(intent)
             end
         )
         if not started then
+            self.build_state = nil
             self:FailAction(intent, "build_start_failed")
         end
         return
@@ -1354,28 +1411,37 @@ function CodexCompanionBrain:BuildAt(intent)
 
     local item = FindInventoryItem(self.inst, recipe.product)
     if item == nil then
-        if self.build_state == nil
-            or self.build_state.intent_id ~= intent.intent_id
-        then
-            self.build_state = {
-                intent_id = intent.intent_id,
-                crafted = false,
-            }
-        end
-        if self.build_state.crafted then
+        if self.build_state ~= nil and self.build_state.crafted then
             self:FailAction(intent, "crafted_placer_missing")
             return
         end
+        if not builder:HasIngredients(recipe) then
+            self:FailAction(intent, "ingredients_missing")
+            return
+        end
+        self.build_state = {
+            intent_id = intent.intent_id,
+            stage = "crafting",
+            started_at = GetTime(),
+            crafted = false,
+        }
         local started = builder:MakeRecipe(
             recipe,
             self.inst:GetPosition(),
             nil,
             nil,
             function()
-                self.build_state.crafted = true
+                if self.build_state ~= nil
+                    and tostring(self.build_state.intent_id)
+                        == tostring(intent.intent_id)
+                then
+                    self.build_state.stage = "crafted"
+                    self.build_state.crafted = true
+                end
             end
         )
         if not started then
+            self.build_state = nil
             self:FailAction(intent, "build_craft_start_failed")
         end
         return
@@ -2098,7 +2164,7 @@ function CodexCompanionBrain:EnsureTaskSurvival(intent)
             self.inst.components.locomotor:Stop()
             self.inst:ClearBufferedAction()
             self.inst.components.locomotor:PushAction(
-                BufferedAction(self.inst, self.inst, ACTIONS.EAT, food),
+                BufferedAction(self.inst, nil, ACTIONS.EAT, food),
                 true
             )
         end
@@ -2317,15 +2383,17 @@ function CodexCompanionBrain:FindRecoveryFood()
 end
 
 function CodexCompanionBrain:QueueRecoveryEat(item)
-    if item == nil
-        or self.inst.sg == nil
+    if item == nil or self.inst.sg == nil then
+        return false
+    end
+    if self.inst:GetBufferedAction() ~= nil
         or self.inst.sg:HasStateTag("busy")
     then
-        return false
+        return true
     end
     self:StopAll()
     self.inst.components.locomotor:PushAction(
-        BufferedAction(self.inst, self.inst, ACTIONS.EAT, item),
+        BufferedAction(self.inst, nil, ACTIONS.EAT, item),
         true
     )
     return true
@@ -2336,19 +2404,22 @@ function CodexCompanionBrain:TryRecoveryHealing()
     if inventory == nil or self.inst.components.health == nil then
         return false
     end
+    if self.inst:GetBufferedAction() ~= nil
+        or (
+            self.inst.sg ~= nil
+            and self.inst.sg:HasStateTag("busy")
+        )
+    then
+        return true
+    end
     for _, item in pairs(inventory.itemslots) do
         if item.components.healer ~= nil or item.components.maxhealer ~= nil then
-            if self.inst.sg == nil
-                or not self.inst.sg:HasStateTag("busy")
-            then
-                self:StopAll()
-                self.inst.components.locomotor:PushAction(
-                    BufferedAction(self.inst, self.inst, ACTIONS.HEAL, item),
-                    true
-                )
-                return true
-            end
-            return false
+            self:StopAll()
+            self.inst.components.locomotor:PushAction(
+                BufferedAction(self.inst, self.inst, ACTIONS.HEAL, item),
+                true
+            )
+            return true
         end
     end
     return false
@@ -3237,7 +3308,7 @@ function CodexCompanionBrain:Eat()
         if item.components.edible ~= nil and self.inst.components.eater:CanEat(item) then
             self.inst:ClearBufferedAction()
             self.inst.components.locomotor:PushAction(
-                BufferedAction(self.inst, self.inst, ACTIONS.EAT, item),
+                BufferedAction(self.inst, nil, ACTIONS.EAT, item),
                 true
             )
             return

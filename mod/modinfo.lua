@@ -8,7 +8,7 @@ description = [[
 不会另行改变任务目标。
 ]]
 author = "xiaolangmin-cloud"
-version = "0.11.1"
+version = "0.11.2"
 forumthread = ""
 
 api_version = 10

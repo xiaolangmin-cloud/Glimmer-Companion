@@ -155,6 +155,11 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn("SerializeIngredients(recipe.ingredients)", source)
         self.assertIn("inventory_counts = inventory_counts", source)
         self.assertIn("equipped = equipped", source)
+        self.assertIn("local CRAFT_ACTION_TIMEOUT_SECONDS = 10", source)
+        self.assertIn("self.craft_state = {", source)
+        self.assertIn('self:FailAction(intent, "craft_timeout")', source)
+        self.assertIn('self.build_state.stage = "crafted"', source)
+        self.assertIn('self:FailAction(intent, "build_craft_timeout")', source)
         self.assertIn('intent.mode == "use_skill"', source)
         self.assertIn('intent.mode == "craft"', source)
         self.assertIn('intent.mode == "build"', source)
@@ -192,6 +197,10 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn("FindNearbyDanger(RECOVERY_SLEEP_DANGER_RADIUS)", source)
         self.assertIn("self.inst:IsNearDanger(self.inst)", source)
         self.assertIn("TUNING.CALORIES_MED", source)
+        self.assertGreaterEqual(
+            source.count("self.inst:GetBufferedAction() ~= nil"),
+            2,
+        )
         self.assertIn("sleepingbaguser.health_bonus_mult", source)
         self.assertIn("sleepingbaguser.sanity_bonus_mult", source)
         self.assertIn("sleepingbaguser.hunger_bonus_mult", source)
@@ -205,6 +214,14 @@ class LuaRuntimeContractTests(unittest.TestCase):
         )
         self.assertIn(
             'return false, "not_enough_hunger_for_sleep", estimate',
+            source,
+        )
+        self.assertNotIn(
+            "BufferedAction(self.inst, self.inst, ACTIONS.EAT",
+            source,
+        )
+        self.assertIn(
+            "BufferedAction(self.inst, nil, ACTIONS.EAT",
             source,
         )
         self.assertIn("params.ignore_autonomous_recovery == true", source)
