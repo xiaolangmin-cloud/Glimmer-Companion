@@ -11,19 +11,19 @@
 仓库地址：
 
 ```text
-https://github.com/xiaolangmin-cloud/dst-codex-companion
+https://github.com/xiaolangmin-cloud/Codex-Companion
 ```
 
 最新 Mod 包：
 
 ```text
-https://github.com/xiaolangmin-cloud/dst-codex-companion/releases/latest
+https://github.com/xiaolangmin-cloud/Codex-Companion/releases/latest
 ```
 
 ## 快速开始
 
 ```powershell
-git clone https://github.com/xiaolangmin-cloud/dst-codex-companion.git
+git clone https://github.com/xiaolangmin-cloud/Codex-Companion.git
 cd dst-codex-companion
 ```
 
