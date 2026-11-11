@@ -1,5 +1,6 @@
 local COMPANION_TAG = "codex_companion"
 local spawning_companion = false
+GLOBAL._codex_companion_chat_hook_installed = false
 local recent_chat_posts = {}
 local tonumber = GLOBAL.tonumber
 local next = GLOBAL.next

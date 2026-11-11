@@ -61,6 +61,10 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn("GLOBAL.Networking_Say = function", source)
         self.assertIn('PostCompanionChat("message", text', source)
         self.assertIn('GetBridgeURL() .. "/" .. route', source)
+        self.assertIn(
+            "GLOBAL._codex_companion_chat_hook_installed = false",
+            source,
+        )
         brain = (
             ROOT / "mod" / "scripts" / "brains" / "codex_companion_brain.lua"
         ).read_text(encoding="utf-8")
