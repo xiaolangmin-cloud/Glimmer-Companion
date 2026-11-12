@@ -42,7 +42,7 @@ IMPLEMENTATION_NOTES: tuple[dict[str, str], ...] = (
             "follow、hold、move_to、move_to_landmark、remember_location、"
             "fetch_item、combat、collect_loot、guard、use_skill、harvest、"
             "harvest_area、gather、craft、build、deploy、plant、till、equip、"
-            "unequip、eat、retreat、operate。执行器在当前任务范围内负责寻路、"
+            "unequip、eat、deliver_item、retreat、operate。执行器在当前任务范围内负责寻路、"
             "攻击、拾取、选择同类目标、装备选择、卡住检测和战斗安全距离。"
             "制作和建造采用状态锁，带放置物建筑分两阶段制作与部署；进食使用标准 "
             "EAT 动作。当前运行时不能自行修改 Lua 源码；如果能力缺失，模型应返回 "
@@ -65,6 +65,24 @@ IMPLEMENTATION_NOTES: tuple[dict[str, str], ...] = (
         ),
     },
     {
+        "topic": "微光 Mod - 任务决策分支与角色技能",
+        "summary": "先路由战斗、采集、制作、建造、运输、耕种、生存等分支，再选择预案和技能",
+        "tags": "mod 决策 分支 战斗 采集 制作 建造 运输 耕种 生存 探索 基地 "
+        "互动 移动 麦斯威尔 暗影法典 技能",
+        "content": (
+            "控制器先用 config/decision_branches.json 做确定性任务分类，分支包括战斗、"
+            "采集、制作、建造、运输、耕种、生存、探索、基地整理、角色互动、移动和"
+            "综合兜底。"
+            "observation.decision_branch 携带目标、必要检查、执行顺序、禁止事项、完成"
+            "信号和知识来源。branch_policies 会直接检查生命、装备、附近敌人和资源，"
+            "常见的危险回避、采集、制作阻断、取物、收获、进食和地标移动不经过模型；"
+            "DeepSeek 只需在信息不足或需要多步骤适配时继续规划。直接 playbook 仍优先。"
+            "麦斯威尔战斗先判断武器、护甲、剩余生命、威胁数量和预计承伤；普通装备足够时"
+            "不使用法典。需要技能时，暗影决斗者负责战斗，暗影蝶只让非 Boss 敌人恐慌，"
+            "暗影牢笼只定身且会吸引仇恨，三者不能混为一谈。"
+        ),
+    },
+    {
         "topic": "微光 Mod - 原生灾害应急",
         "summary": "本地缓存识别原生危险，独立处置并用轮换可爱文案聊天",
         "tags": "mod 应急 灾害 猎犬 狗 蠕虫 地震 青蛙雨 梦魇 暴乱 酸雨 "
@@ -78,6 +96,21 @@ IMPLEMENTATION_NOTES: tuple[dict[str, str], ...] = (
             "准备多套轮换的可爱聊天文案，例如“来狗啦来狗啦”，不唤醒模型。"
             "用户设置 ignore_survival_safety 或 survival_policy=force 时，应急层"
             "汇报风险但不硬性取消任务；未知自定义 Mod 事件不在覆盖范围。"
+        ),
+    },
+    {
+        "topic": "微光 Mod - 游戏内轮盘命令",
+        "summary": "12 分支图标轮盘直接生成结构化任务，不调用模型",
+        "tags": "mod 轮盘 快捷菜单 F8 图标 采集 数量 分支 wheel RPC",
+        "content": (
+            "客户端按可配置快捷键打开微光命令轮盘，默认 F8。第一层固定 12 个"
+            "可执行分支，不显示综合兜底 general；后续按动作、目标、数量展开。"
+            "草、树枝、浆果、胡萝卜、金块等使用原版物品图标，数量 5、10、15、20、"
+            "30、50 叠在图标上，全部选完后自动发布。客户端只通过 Mod RPC 提交"
+            "schema、branch_id、action、target_id、amount，服务端校验发送者和长度，"
+            "再调用控制器 POST /wheel-command。控制器按白名单生成意图，不调用"
+            "DeepSeek，但仍执行战斗安全、配方材料、生存和跨世界检查。状态查询直接"
+            "回复且不替换当前任务。跨世界参数不能由客户端注入。"
         ),
     },
     {

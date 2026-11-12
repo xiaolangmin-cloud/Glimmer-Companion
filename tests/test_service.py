@@ -161,7 +161,7 @@ class CompanionServiceTests(unittest.TestCase):
                 )
                 service.instruction("你收完作物后告诉我")
                 deadline = time.time() + 2
-                while time.time() < deadline and service.state()["revision"] == 0:
+                while time.time() < deadline and not service.state()["messages"]:
                     time.sleep(0.02)
                 state = service.state()
                 self.assertEqual(state["intent"]["mode"], "follow")
@@ -807,6 +807,10 @@ class CompanionServiceTests(unittest.TestCase):
                 state = service.message("帮我打些蜘蛛丝")
                 self.assertEqual(state["playbook_matched"], "maxwell.collect_spider_silk")
                 self.assertEqual(state["intent"]["mode"], "collect_loot")
+                self.assertEqual(
+                    state["decision_branch"]["id"],
+                    "collection",
+                )
                 self.assertIn("蜘蛛丝", state["messages"][-1]["text"])
                 grass = service.message("去采集附近的草")
                 self.assertEqual(
@@ -815,11 +819,129 @@ class CompanionServiceTests(unittest.TestCase):
                 )
                 self.assertEqual(grass["intent"]["mode"], "harvest_area")
                 self.assertEqual(grass["intent"]["position"], [40, -12])
+                self.assertEqual(
+                    grass["decision_branch"]["id"],
+                    "collection",
+                )
                 forced = service.message(
                     "别管饱食度，务必去帮我打十个蜘蛛丝"
                 )
                 self.assertTrue(
                     forced["intent"]["params"]["ignore_survival_safety"]
+                )
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_unfavorable_frog_group_is_handled_without_deepseek(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            service.planner = ExplodingPlanner()
+            try:
+                service.tick(
+                    {
+                        "companion": {
+                            "guid": "9",
+                            "prefab": "waxwell",
+                            "health": 20,
+                            "max_health": 75,
+                            "hunger": 90,
+                            "max_hunger": 150,
+                            "sanity": 120,
+                            "max_sanity": 200,
+                        },
+                        "player": {
+                            "guid": "1",
+                            "prefab": "walter",
+                            "x": 2,
+                            "z": 1,
+                        },
+                        "world": {"shard": "1", "is_master": True},
+                        "inventory": [],
+                        "inventory_counts": {},
+                        "equipped": [],
+                        "capabilities": {"known_recipes": []},
+                        "nearby": [
+                            {
+                                "guid": str(index),
+                                "prefab": "frog",
+                                "hostile": True,
+                                "distance": index,
+                            }
+                            for index in range(1, 6)
+                        ],
+                        "events": [],
+                    }
+                )
+                state = service.message("帮我打一下这些青蛙")
+                self.assertEqual(
+                    state["local_policy_matched"],
+                    "combat.avoid_unfavorable_group",
+                )
+                self.assertEqual(state["intent"]["mode"], "follow")
+                self.assertEqual(state["decision_branch"]["id"], "combat")
+                self.assertIn("5 只青蛙", state["messages"][-1]["text"])
+                service.tick(
+                    {
+                        "companion": {
+                            "guid": "9",
+                            "prefab": "waxwell",
+                            "health": 20,
+                            "max_health": 75,
+                        },
+                        "player": {
+                            "guid": "1",
+                            "prefab": "walter",
+                            "x": 2,
+                            "z": 1,
+                        },
+                        "world": {"shard": "1", "is_master": True},
+                        "inventory": [],
+                        "inventory_counts": {},
+                        "equipped": [],
+                        "capabilities": {"known_recipes": []},
+                        "nearby": [
+                            {
+                                "guid": str(index),
+                                "prefab": "spider",
+                                "hostile": True,
+                                "distance": index,
+                            }
+                            for index in range(1, 5)
+                        ],
+                        "events": [],
+                    }
+                )
+                spider_state = service.message("帮我打些蜘蛛丝")
+                self.assertEqual(
+                    spider_state["local_policy_matched"],
+                    "combat.avoid_unfavorable_group",
+                )
+                self.assertEqual(spider_state["intent"]["mode"], "follow")
+                self.assertEqual(
+                    spider_state["decision_branch"]["id"],
+                    "combat",
                 )
             finally:
                 service.stop()

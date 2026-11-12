@@ -7,6 +7,26 @@ DeepSeek 默认不参与逐帧控制，只在用户指令或任务完成、失�
 不需要前缀；DeepSeek 根据内容判断是任务指令还是普通对话。表情、系统公告和
 非玩家文字事件不会进入控制器。
 
+游戏内快捷轮盘使用独立入口：
+
+```http
+POST /wheel-command
+Content-Type: application/json
+
+{
+  "schema": 1,
+  "branch_id": "collection",
+  "action": "collect_resource",
+  "target_id": "grass",
+  "amount": 10
+}
+```
+
+客户端轮盘只提交这五个结构化字段。服务端拒绝未知分支、未知动作、非菜单数量和
+超过长度限制的消息；控制器再次忽略 `mode`、`target_shard` 等未授权字段，并按
+固定动作表生成意图。轮盘命令不调用 DeepSeek，但仍经过战斗、配方、材料、生存
+和跨世界安全检查。信息查询只产生回复，不替换当前任务。
+
 控制器同时提供本机角色选择页：
 
 ```text
@@ -98,6 +118,13 @@ Content-Type: application/json
 22. 微光生成及周期监督时会同步玩家角色皮肤。若微光与玩家当前角色相同，直接复制
     当前实体整套服装；若不同，则通过 `Profile:GetSkinsForCharacter` 读取玩家为
     所选角色保存的皮肤，并校验所有权后应用。运行时换装会在数秒内同步。
+23. 控制器在调用模型前先执行本地任务分支路由，把任务归入战斗、采集、制作、建造、
+    运输、耕种、生存、探索、基地整理、角色互动、移动或综合分支。观察中的
+    `decision_branch` 包含目标、必要检查、执行顺序、规则、完成信号和知识来源。
+    分支只缩小方案范围，不直接伪造完成结果；模型确定最终意图后，再按意图 `mode`
+    与任务文本复核当前分支。`controller/branch_policies.py` 会对高置信度、状态可判定
+    的情形直接生成安全意图或拒绝理由，例如无武器低血时不攻击群居敌群、附近成熟作物
+    直接收获、材料不足时不假装制作。常用指令仍优先使用直接 playbook，不进入模型。
 
 ## 战斗契约
 
@@ -233,6 +260,7 @@ Content-Type: application/json
 - `eat`
 - `retreat`
 - `operate`
+- `deliver_item`
 - `speak`
 
 ## 角色能力与生产

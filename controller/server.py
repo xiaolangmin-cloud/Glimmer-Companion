@@ -121,6 +121,10 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 state = self.server.service.force_command(payload)
                 self._send_json(200, state)
                 return
+            if self.path == "/wheel-command":
+                state = self.server.service.wheel_command(payload)
+                self._send_json(200, state)
+                return
             if self.path == "/companion-character":
                 prefab = payload.get("prefab")
                 if not isinstance(prefab, str):

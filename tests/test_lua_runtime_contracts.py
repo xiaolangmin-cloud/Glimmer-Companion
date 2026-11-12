@@ -42,8 +42,37 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn('name = "微光旅伴"', modinfo)
         self.assertIn('name = "companion_character"', modinfo)
         self.assertIn('name = "combat_leash_distance"', modinfo)
+        self.assertIn('name = "wheel_key"', modinfo)
+        self.assertIn("server_only_mod = false", modinfo)
+        self.assertIn('data = "KEY_F8"', modinfo)
         self.assertIn('data = "wendy"', modinfo)
         self.assertIn('default = "waxwell"', modinfo)
+
+    def test_command_wheel_is_client_ui_with_server_validation(self) -> None:
+        modmain = (ROOT / "mod" / "modmain.lua").read_text(encoding="utf-8")
+        widget = (
+            ROOT
+            / "mod"
+            / "scripts"
+            / "widgets"
+            / "glimmer_command_wheel.lua"
+        ).read_text(encoding="utf-8")
+        menu = (
+            ROOT / "mod" / "scripts" / "glimmer_wheel_menu.lua"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('AddModRPCHandler(\n    "GlimmerWheel"', modmain)
+        self.assertIn('GetBridgeURL() .. "/wheel-command"', modmain)
+        self.assertIn("#encoded > 2048", modmain)
+        self.assertIn('AddClassPostConstruct("widgets/controls"', modmain)
+        self.assertIn('GetModConfigData("wheel_key")', modmain)
+        self.assertIn('require "widgets/glimmer_command_wheel"', modmain)
+        self.assertIn('require "widgets/wheel"', widget)
+        self.assertIn("function GlimmerCommandWheel:OnExecute", widget)
+        self.assertIn("node.nestedwheel", widget)
+        self.assertIn("tostring(source.quantity)", widget)
+        self.assertIn("amount = amount", menu)
+        self.assertIn("images/inventoryimages3.xml", menu)
 
     def test_shard_transition_uses_one_full_companion_record(self) -> None:
         source = (ROOT / "mod" / "modmain.lua").read_text(encoding="utf-8")
@@ -54,6 +83,15 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn("data._codex_companion_migration", source)
         self.assertIn("_codex_companion_migrating = true", source)
         self.assertIn("PlaceCompanionNearPlayer(companion, player)", source)
+        self.assertIn(
+            "PlaceCompanionNearPlayer(companion, player)\n"
+            "    PlayCompanionSpawnEffect(companion)",
+            source,
+        )
+        self.assertIn("local function OnCompanionDeath(inst, data)", source)
+        self.assertIn('[微光] " .. message', source)
+        self.assertIn("world:DoTaskInTime(5, function()", source)
+        self.assertIn("TrySpawnCompanion(player)", source)
         self.assertNotIn("SerializeInventory(inst)", source)
         self.assertNotIn("GetStateFile()", source)
 
@@ -105,6 +143,24 @@ class LuaRuntimeContractTests(unittest.TestCase):
         self.assertIn("self.last_combat_event_at = now", source)
         self.assertIn('self.inst:ListenForEvent("death", self.death_listener)', source)
         self.assertIn('self:QueueEvent("companion_dead"', source)
+        self.assertIn('"CAST_SPELLBOOK"', source)
+        self.assertIn(
+            "FindInventoryItem(self.inst, CODEX_UMBRA_PREFAB)",
+            source,
+        )
+        self.assertIn(
+            "function CodexCompanionBrain:TryCodexUmbraCombatSpell",
+            source,
+        )
+        self.assertIn("spellbook:SelectSpell(spell_index)", source)
+        self.assertIn("aoespell:CastSpell(self.inst, pos)", source)
+        self.assertIn('self:QueueEvent("tactical_spell"', source)
+        self.assertIn("CODEX_GOOD_ARMOR_ABSORB", source)
+        self.assertIn("CODEX_GOOD_WEAPON_DAMAGE", source)
+        self.assertIn('return false, "gear_sufficient"', source)
+        self.assertIn('spell_name = "shadow_duelist"', source)
+        self.assertIn('spell_name = "shadow_sneak"', source)
+        self.assertIn('spell_name = "shadow_prison"', source)
         self.assertIn("function CodexCompanionBrain:PrepareForMigration", source)
         self.assertIn("function CodexCompanionBrain:ResumeAfterMigration", source)
         self.assertIn('reason = "shard_transition"', source)

@@ -29,6 +29,7 @@ ALLOWED_MODES = {
     "unequip",
     "eat",
     "fetch_item",
+    "deliver_item",
     "retreat",
     "operate",
     "speak",

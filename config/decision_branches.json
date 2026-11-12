@@ -1,0 +1,459 @@
+{
+  "schema": 1,
+  "default_branch": "general",
+  "branches": [
+    {
+      "id": "combat",
+      "name": "战斗与护卫",
+      "priority": 90,
+      "modes": ["combat", "guard", "retreat"],
+      "task_types": ["combat", "boss"],
+      "skill_actions": [
+        "CASTSPELL",
+        "CAST_SPELLBOOK",
+        "CAST_POCKETWATCH",
+        "MODSLINGSHOT",
+        "STOPMODSLINGSHOT",
+        "SUMMONGUARDIAN",
+        "TOGGLEWXSHIELDING",
+        "TOGGLEWXSCREECH"
+      ],
+      "patterns": [
+        {"pattern": "打|攻击|击杀|杀掉|战斗|迎战|拦住|击退|清理", "weight": 8},
+        {"pattern": "蜘蛛|猎犬|青蛙|巨鹿|熊獾|龙蝇|蜂后|蚁狮|克劳斯|触手|鱼人|发条", "weight": 8},
+        {"pattern": "保护我|掩护|挡住|死战|撤退|别追|不要追", "weight": 14}
+      ],
+      "objective": "在保护玩家和自身安全的前提下处理敌对目标。",
+      "required_checks": [
+        "目标身份、数量、当前生命和攻击距离",
+        "微光生命、护甲、武器伤害和预计下一次受伤",
+        "玩家距离、撤退路线和战斗安全距离",
+        "角色技能、物品消耗和施法冷却"
+      ],
+      "decision_order": [
+        "先判断普通武器和护甲能否安全解决",
+        "能安全解决时保持普通战斗，不消耗技能资源",
+        "压力超出装备承受范围时再选择控制、召唤或撤退",
+        "下一次受击可能致命且未获死战许可时优先撤退"
+      ],
+      "rules": [
+        "暗影决斗者负责伤害和承伤，暗影蝶只制造恐慌，暗影牢笼只定身且会吸引仇恨",
+        "暗影蝶对 Boss 无效；暗影牢笼对 Boss 的持续时间约为普通目标的一半",
+        "不为了追击目标远离玩家，除非任务明确允许独立远行",
+        "战斗结果必须根据事件确认，不能把目标失踪说成自己击杀"
+      ],
+      "completion_signals": ["目标死亡", "用户撤离命令", "危险解除", "任务被安全限制阻断"],
+      "sources": [
+        "https://dontstarve.wiki.gg/wiki/Codex_Umbra/DST",
+        "https://dontstarve.wiki.gg/wiki/Shadow_Traps",
+        "https://dontstarve.wiki.gg/wiki/Frog/DST",
+        "https://dontstarve.wiki.gg/wiki/Frog_Rain/DST"
+      ]
+    },
+    {
+      "id": "collection",
+      "name": "采集与狩猎",
+      "priority": 70,
+      "modes": ["harvest", "harvest_area", "gather", "collect_loot"],
+      "task_types": ["gathering", "combat_loot", "resource"],
+      "skill_actions": ["USEITEM", "USEITEMON"],
+      "patterns": [
+        {"pattern": "采集|采|摘|收割|收获|捡|拾取|收集|砍|挖|开采|砍伐|割", "weight": 8},
+        {"pattern": "草|树枝|浆果|胡萝卜|花|芦苇|木头|石头|金块|燧石", "weight": 14},
+        {"pattern": "蜘蛛丝|战利品|掉落物", "weight": 22},
+        {"pattern": "成熟|可采收|资源|材料", "weight": 4}
+      ],
+      "objective": "取得指定资源，尽量不破坏非目标资源，并在背包足够时返回交付。",
+      "required_checks": [
+        "目标类型、是否成熟、数量或目标数量",
+        "背包剩余空间、已有数量和是否需要交付给玩家",
+        "附近危险、返回路线以及饥饿和生命余量",
+        "击杀掉落任务还要确认来源生物和最后一击归属"
+      ],
+      "decision_order": [
+        "先检查附近和已记录资源点",
+        "优先采集当前区域并跳过玩家已经收走的目标",
+        "目标不足时扩大巡逻，但设置搜索时间上限",
+        "满足数量后返回玩家；没有来源时明确报告"
+      ],
+      "rules": [
+        "成长型树木和大理石树只处理达到最终成长阶段的个体",
+        "普通采集不顺手扩大成无关资源的大规模收集",
+        "击杀来源和拾取掉落分开记录，不能把目标死亡说成自己击杀",
+        "背包不足时先交付、丢弃低价值物品或报告，不静默遗漏"
+      ],
+      "completion_signals": ["目标数量达到", "范围内资源耗尽", "背包不足", "搜索超时"],
+      "sources": [
+        "https://dontstarve.wiki.gg/wiki/Regrowth"
+      ]
+    },
+    {
+      "id": "crafting",
+      "name": "制作与配方",
+      "priority": 68,
+      "modes": ["craft"],
+      "task_types": ["crafting"],
+      "skill_actions": ["USEITEM", "USEITEMON"],
+      "patterns": [
+        {"pattern": "制作|合成|做|造|配方|原型|解锁", "weight": 7},
+        {"pattern": "斧头|镐子|护符|工具|装备|药剂|料理", "weight": 8}
+      ],
+      "objective": "使用当前角色真实可用的配方和材料完成物品制作。",
+      "required_checks": [
+        "配方是否已知及所需科技或制作站",
+        "背包内已有材料、缺少材料和替代来源",
+        "产物价值、耐久和是否值得消耗稀有材料",
+        "制作位置、附近危险和返回路线"
+      ],
+      "decision_order": [
+        "先查可制作配方和材料库存",
+        "材料不足时建立补料子任务并说明缺少什么",
+        "需要制作站时先移动到对应站点",
+        "制作成功后核对产物再报告"
+      ],
+      "rules": [
+        "不把建造建筑和制作便携物品混为一谈",
+        "配方必须以观察数据为准，不能凭印象声称已经会做",
+        "缺少能力或配方时报告 capability_gap，不伪造完成"
+      ],
+      "completion_signals": ["产物进入背包", "配方不可用", "材料不足", "制作站缺失"],
+      "sources": [
+        "https://dontstarve.wiki.gg/wiki/Crafting"
+      ]
+    },
+    {
+      "id": "construction",
+      "name": "建造与部署",
+      "priority": 64,
+      "modes": ["build", "deploy"],
+      "task_types": ["construction", "building"],
+      "skill_actions": ["USEITEM", "USEITEMON"],
+      "patterns": [
+        {"pattern": "建造|搭建|修建|建一个|放一个|放置|摆放|修复|拆掉|锤掉", "weight": 10},
+        {"pattern": "墙|门|箱子|火堆|锅|冰箱|科学机器|炼金引擎|帐篷|晾肉架|避雷针|蜂箱", "weight": 8}
+      ],
+      "objective": "在合适位置部署建筑，满足材料、空间、功能和通行需求。",
+      "required_checks": [
+        "配方、材料、制作站和当前是否已预制作",
+        "目标地点是否可通行、是否与其他建筑冲突",
+        "建筑朝向、使用频率、道路和后续扩展空间",
+        "建造期间附近危险与玩家距离"
+      ],
+      "decision_order": [
+        "先确认材料和预制作状态",
+        "再检查位置、碰撞半径和通行路线",
+        "执行放置后核对实体是否真实存在",
+        "空间冲突时移动到备选位置并说明原因"
+      ],
+      "rules": [
+        "不堵住洞口、道路、箱子或常用工作区",
+        "大半径建筑先放，小半径建筑后放",
+        "拆除前确认目标和掉落物，避免误拆玩家设施"
+      ],
+      "completion_signals": ["建筑实体生成", "放置位置无效", "材料不足", "附近危险中断"],
+      "sources": [
+        "https://dontstarve.wiki.gg/wiki/Structures"
+      ]
+    },
+    {
+      "id": "transport",
+      "name": "运输与取物",
+      "priority": 66,
+      "modes": ["fetch_item"],
+      "task_types": ["transport"],
+      "skill_actions": ["USEITEM"],
+      "patterns": [
+        {"pattern": "拿|取|送|运|搬|取回|带回|带来|带上|送到|放到|放进|装箱|带.{0,6}(?:个|块|组|根|张|捆|瓶)", "weight": 14},
+        {"pattern": "箱子|背包|交给|给我|送到家|拿回来|(?:家里|家中|仓库|基地).{0,8}(?:拿|取|带|搬|送)", "weight": 16}
+      ],
+      "objective": "把正确物品安全地从来源位置送到目标位置或玩家手中。",
+      "required_checks": [
+        "目标物品、数量、已知容器位置和替代来源",
+        "背包空间、可堆叠数量和路线上的危险",
+        "是否要求返回玩家、放入指定箱子或留在当前位置",
+        "任务完成前是否可能遭遇跨世界限制"
+      ],
+      "decision_order": [
+        "优先搜索已记录的容器和地面物品",
+        "找不到时扩大搜索并报告缺失，不把相似物品冒充目标",
+        "取得后核对数量，再按目的地返回",
+        "交付后确认物品已经从背包转出"
+      ],
+      "rules": [
+        "运输途中不顺手执行无关长任务",
+        "背包不足时先交付部分数量并解释",
+        "不能自行跨越地面和洞穴世界"
+      ],
+      "completion_signals": ["物品交付完成", "目标不存在", "背包不足", "路线被阻断"],
+      "sources": [
+        "https://dontstarve.wiki.gg/wiki/Inventory"
+      ]
+    },
+    {
+      "id": "farming",
+      "name": "耕种与养殖",
+      "priority": 62,
+      "modes": ["plant", "till"],
+      "task_types": ["farming", "husbandry"],
+      "skill_actions": ["USEITEM", "USEITEMON"],
+      "patterns": [
+        {"pattern": "耕种|耕地|播种|种植|种|施肥|浇水|除草|照料|农场|作物|种子", "weight": 16},
+        {"pattern": "成熟|收获|巨大作物|养殖|喂养|圈养", "weight": 5}
+      ],
+      "objective": "平衡季节、养分、水分、家庭和照料成本，稳定取得农作物或养殖收益。",
+      "required_checks": [
+        "季节、作物种类、种子和当前生长阶段",
+        "土壤养分、水分、杂草和压力来源",
+        "成熟产物的用途、数量和背包空间",
+        "玩家希望种什么，或依据库存和季节自主选择"
+      ],
+      "decision_order": [
+        "先收成熟作物并报告数量",
+        "再核对季节与种子，决定是否立即播种",
+        "执行耕地、播种、施肥和浇水",
+        "把照料任务拆分，避免无意义重复劳动"
+      ],
+      "rules": [
+        "作物有种子、幼苗、小、中、成熟五个阶段，最终阶段才收获",
+        "巨大作物要求各成长阶段尽量没有压力，不能只在成熟时检查一次",
+        "没有合适种子或季节不合适时说明原因"
+      ],
+      "completion_signals": ["播种完成", "成熟作物收取", "缺少种子或耕地", "季节不适"],
+      "sources": [
+        "https://dontstarve.wiki.gg/wiki/Farming/DST"
+      ]
+    },
+    {
+      "id": "survival",
+      "name": "生存与恢复",
+      "priority": 88,
+      "modes": ["eat"],
+      "task_types": ["survival", "recovery"],
+      "skill_actions": ["USEITEM", "USEEQUIPPEDITEM"],
+      "patterns": [
+        {"pattern": "吃|进食|饿了|饥饿|饱食|回血|治疗|生命|理智|精神|睡觉|帐篷|保暖|降温|避雨", "weight": 11},
+        {"pattern": "没食物|受伤|快死了|恢复|补给", "weight": 8}
+      ],
+      "objective": "先维持生命和行动能力，再继续当前任务。",
+      "required_checks": [
+        "生命、饥饿、精神和温度",
+        "随身食物、治疗物品、光源和防护装备",
+        "昼夜、季节、天气、附近危险和睡眠时间",
+        "恢复消耗是否会影响后续任务"
+      ],
+      "decision_order": [
+        "先尝试背包内恢复，不改变当前任务目标",
+        "条件允许时使用帐篷或返回安全区",
+        "无法恢复时缩短或取消远行并说明原因",
+        "用户明确要求无视生存风险时才继续高风险任务"
+      ],
+      "rules": [
+        "灾害应急由本地 Lua 优先处理",
+        "不在危险攻击范围内睡觉或进食",
+        "恢复完成后重新评估原任务是否仍然可行"
+      ],
+      "completion_signals": ["生命或饥饿恢复到安全值", "恢复物品耗尽", "环境不允许恢复"],
+      "sources": []
+    },
+    {
+      "id": "exploration",
+      "name": "探索与侦察",
+      "priority": 55,
+      "modes": ["move_to", "move_to_landmark"],
+      "task_types": ["exploration", "movement_remote"],
+      "skill_actions": ["BLINK"],
+      "patterns": [
+        {"pattern": "探索|探图|开图|侦察|寻找|找一下|巡逻|查看|观察|地图|标记位置", "weight": 8},
+        {"pattern": "去哪|怎么走|远处|另一边|未知区域", "weight": 4}
+      ],
+      "objective": "安全扩大可见地图、记录有用地点和资源，不盲目长途游荡。",
+      "required_checks": [
+        "目标方向、已探索边界、已知地标和返回路径",
+        "光源、食物、护甲、季节和天气",
+        "是否允许远离玩家以及预定搜索时间",
+        "发现资源、危险或容器后的记录方式"
+      ],
+      "decision_order": [
+        "先查已有地图和资源记忆",
+        "沿安全路线向外探索并持续记录地标",
+        "达到时间预算或风险阈值后返回",
+        "汇报新发现的位置、资源和未完成区域"
+      ],
+      "rules": [
+        "没有目标时不做无限随机游荡",
+        "不进入另一个世界",
+        "发现危险时先保命，再决定是否继续探索"
+      ],
+      "completion_signals": ["达到探索目标", "发现目标资源", "风险过高", "时间预算耗尽"],
+      "sources": []
+    },
+    {
+      "id": "base",
+      "name": "基地整理与维护",
+      "priority": 52,
+      "modes": ["operate"],
+      "task_types": ["base", "storage"],
+      "skill_actions": ["USEITEM", "USEITEMON"],
+      "patterns": [
+        {"pattern": "整理|归类|收纳|存放|维护|基地|营地|做饭|烹饪|打开箱子|清点", "weight": 14},
+        {"pattern": "箱子|冰箱|晾肉架|锅|储物", "weight": 5}
+      ],
+      "objective": "让基地保持可用、分类清楚并减少物品腐坏和取用成本。",
+      "required_checks": [
+        "当前库存、箱子标签和已有分类",
+        "食物新鲜度、耐久和危险品",
+        "制作、烹饪和储存设施的可用空间",
+        "整理是否会妨碍玩家当前操作"
+      ],
+      "decision_order": [
+        "先检查目标容器和附近的临时物品",
+        "按资源、食物、装备和任务材料分类",
+        "腾出空间后再处理低优先级物品",
+        "完成后报告放入位置和未处理物品"
+      ],
+      "rules": [
+        "不擅自丢弃玩家未明确批准的物品",
+        "危险品和任务材料单独处理",
+        "整理不触发大范围重新布置"
+      ],
+      "completion_signals": ["目标容器整理完毕", "空间不足", "发现危险品"],
+      "sources": [
+        "https://dontstarve.wiki.gg/wiki/Chest/DST"
+      ]
+    },
+    {
+      "id": "interaction",
+      "name": "交易与角色互动",
+      "priority": 48,
+      "modes": [],
+      "task_types": ["interaction", "trade"],
+      "skill_actions": ["USEITEM", "USEITEMON"],
+      "patterns": [
+        {"pattern": "交易|交换|买卖|换|给猪王|喂食|驯服|对话|问一下|告诉", "weight": 22}
+      ],
+      "objective": "以最少资源完成交易、驯服或角色互动。",
+      "required_checks": [
+        "互动对象、交易物和交换结果",
+        "当前持有数量与保留余量",
+        "对象状态、危险性和跟随关系",
+        "重复互动是否会造成资源浪费"
+      ],
+      "decision_order": [
+        "确认对象和交易规则",
+        "核对物品数量与必要保留量",
+        "完成一次后检查结果，再决定是否继续",
+        "失败时报告原因，不循环投喂"
+      ],
+      "rules": [
+        "不拿任务关键材料做低价值交易",
+        "不主动攻击刚完成互动的非敌对对象",
+        "交易结果必须根据背包变化确认"
+      ],
+      "completion_signals": ["目标物品增减", "互动失败", "对象离开或死亡"],
+      "sources": []
+    },
+    {
+      "id": "movement",
+      "name": "移动与跟随",
+      "priority": 45,
+      "modes": ["follow", "hold"],
+      "task_types": ["movement"],
+      "skill_actions": ["BLINK"],
+      "patterns": [
+        {"pattern": "跟着我|跟我走|跟紧|过来|回到我身边|回家|回基地|回仓库|等我|原地等|别动|停在这里", "weight": 12}
+      ],
+      "objective": "保持行为可控、可达和安全距离。",
+      "required_checks": [
+        "玩家位置、寻路可达性和当前任务状态",
+        "是否需要跨越世界或中断正在执行的动作",
+        "跟随距离与战斗安全限制"
+      ],
+      "decision_order": [
+        "先停止与新移动命令冲突的旧任务",
+        "移动到目标距离内",
+        "到达后默认进入跟随",
+        "无法到达时报告阻塞原因"
+      ],
+      "rules": [
+        "跟随不穿过无法通行的地形",
+        "不因追玩家而放弃必要的战斗防护",
+        "未收到明确等待命令时保持跟随"
+      ],
+      "completion_signals": ["到达目标距离", "路径阻塞", "玩家切换世界"],
+      "sources": []
+    },
+    {
+      "id": "information",
+      "name": "信息查询与状态",
+      "priority": 58,
+      "modes": [],
+      "task_types": ["status", "information", "chat"],
+      "skill_actions": [],
+      "patterns": [
+        {"pattern": "多少|进度|状态|在哪|位置|有没有|是否|怎么样|为什么|怎么用|介绍一下|告诉我", "weight": 30}
+      ],
+      "objective": "根据真实观察、日志和记忆回答，不改变正在执行的任务。",
+      "required_checks": [
+        "问题询问的是物品数量、位置、状态、进度还是游戏知识",
+        "答案是否存在于 current observation、journal、world memory 或技能记忆",
+        "是否需要说明数据缺失，而不是猜测"
+      ],
+      "decision_order": [
+        "识别问题类型",
+        "优先查询已有观察和日志",
+        "需要攻略时先查技能记忆，再决定是否联网研究",
+        "只回复答案，不因为普通询问替换当前任务"
+      ],
+      "rules": [
+        "状态查询不得把当前采集、战斗或运输任务改成 hold",
+        "没观察到的数量或位置不能猜测",
+        "事实回答与建议分开表达"
+      ],
+      "completion_signals": ["问题已回答", "缺少可靠信息"],
+      "sources": []
+    },
+    {
+      "id": "general",
+      "name": "综合任务",
+      "priority": 1,
+      "modes": ["use_skill", "equip", "unequip", "remember_location", "speak"],
+      "task_types": ["general", "status"],
+      "skill_actions": [
+        "CASTSPELL",
+        "CAST_SPELLBOOK",
+        "CAST_POCKETWATCH",
+        "USEITEM",
+        "USEITEMON",
+        "USEEQUIPPEDITEM",
+        "BLINK",
+        "SUMMONGUARDIAN",
+        "TOGGLEWXSHIELDING",
+        "TOGGLEWXSCREECH",
+        "READ",
+        "MODSLINGSHOT",
+        "STOPMODSLINGSHOT"
+      ],
+      "patterns": [],
+      "objective": "先识别真实目标，再选择可执行子分支。",
+      "required_checks": [
+        "用户真正要求的结果",
+        "当前世界、角色、背包和附近实体",
+        "任务是否包含移动、战斗、收集或生产子目标",
+        "缺少能力时必须明确报告"
+      ],
+      "decision_order": [
+        "拆分目标",
+        "选择匹配分支",
+        "执行前检查资源和危险",
+        "完成后按事实汇报"
+      ],
+      "rules": [
+        "不要把未观察到的结果说成已完成",
+        "不要凭空生成 GUID 或坐标",
+        "跨世界任务必须拒绝"
+      ],
+      "completion_signals": [],
+      "sources": []
+    }
+  ]
+}

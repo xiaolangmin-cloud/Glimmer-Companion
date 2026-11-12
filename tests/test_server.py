@@ -97,6 +97,24 @@ class ServerTests(unittest.TestCase):
                     message_state = json.loads(response.read())
                 self.assertTrue(message_state["message_received"])
 
+                wheel_payload = json.dumps(
+                    {
+                        "schema": 1,
+                        "branch_id": "movement",
+                        "action": "follow",
+                    }
+                ).encode("utf-8")
+                request = Request(
+                    base + "/wheel-command",
+                    data=wheel_payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=2) as response:
+                    wheel_state = json.loads(response.read())
+                self.assertTrue(wheel_state["wheel_command_received"])
+                self.assertEqual(wheel_state["intent"]["mode"], "follow")
+
                 service.journal.record("test.event", "日志接口测试")
                 with urlopen(base + "/logs?limit=5", timeout=2) as response:
                     logs = json.loads(response.read())

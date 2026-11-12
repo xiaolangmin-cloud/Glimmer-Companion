@@ -12,14 +12,22 @@ from typing import Any
 
 from .agent_memory import AgentMemoryStore
 from .arbiter import IntentArbiter
+from .branch_policies import BranchPolicyEngine, PolicyDecision
 from .characters import CharacterPreferenceStore
 from .config import Settings
+from .decision_branches import BranchMatch, DecisionBranchRouter
 from .deepseek import DeepSeekError, DeepSeekPlanner
 from .journal import CompanionJournal
 from .memory import MemoryStore
 from .mod_knowledge import IMPLEMENTATION_NOTES
 from .playbooks import PlaybookMatch, PlaybookMatcher
 from .research import CodexResearchService, ResearchError
+from .wheel_commands import (
+    WheelSelection,
+    build_intent,
+    canonical_text,
+    normalize_selection,
+)
 
 
 IMPORTANT_EVENTS = {
@@ -384,6 +392,15 @@ class CompanionService:
             settings.playbook_dir
             or (Path(__file__).resolve().parent.parent / "config" / "playbooks")
         )
+        self.branches = DecisionBranchRouter(
+            settings.decision_branch_config
+            or (
+                Path(__file__).resolve().parent.parent
+                / "config"
+                / "decision_branches.json"
+            )
+        )
+        self.branch_policies = BranchPolicyEngine()
         self.arbiter = IntentArbiter(settings.default_lease_seconds)
         prompt = settings.prompt_path.read_text(encoding="utf-8")
         self.planner = DeepSeekPlanner(
@@ -407,10 +424,13 @@ class CompanionService:
         self._pending_instruction: str | None = None
         self._pending_trigger = "instruction"
         self._pending_playbooks: list[dict[str, Any]] = []
+        self._pending_branch: BranchMatch | None = None
+        self._active_branch: BranchMatch | None = None
         self._pending_chats: deque[str] = deque(maxlen=20)
         self._messages: deque[dict[str, Any]] = deque(maxlen=50)
         self._last_error: str | None = None
         self._last_decision_at: float | None = None
+        self._last_local_policy: dict[str, Any] | None = None
         self._thread: threading.Thread | None = None
         self._ambient_thread: threading.Thread | None = None
         self._chat_thread: threading.Thread | None = None
@@ -469,7 +489,7 @@ class CompanionService:
         self._remember_world_snapshot(snapshot)
         session_id = str((snapshot.get("world") or {}).get("session_id") or "")
         with self._lock:
-            self._latest = copy.deepcopy(snapshot)
+            snapshot = dict(snapshot)
             self._latest_revision += 1
             revision = self._latest_revision
             if (
@@ -497,6 +517,18 @@ class CompanionService:
                     "检测到新游戏会话，旧任务已清除并切回跟随",
                     data={"session_id": session_id},
                 )
+                self._active_branch = self.branches.classify_intent(
+                    current.to_dict(),
+                    snapshot,
+                )
+                self._last_local_policy = None
+            branch = self._active_branch or self.branches.classify_intent(
+                self.arbiter.active().to_dict(),
+                snapshot,
+            )
+            self._active_branch = branch
+            snapshot["decision_branch"] = branch.context()
+            self._latest = copy.deepcopy(snapshot)
             if session_id:
                 self._last_world_session_id = session_id
             important_events = [
@@ -531,6 +563,15 @@ class CompanionService:
                 level="warning",
                 data={"intent_id": state["intent"]["intent_id"]},
             )
+            expired_branch = self.branches.classify_intent(
+                state["intent"],
+                self._latest,
+            )
+            with self._lock:
+                self._active_branch = expired_branch
+                if self._latest:
+                    self._latest["decision_branch"] = expired_branch.context()
+            state["decision_branch"] = expired_branch.context()
         state["messages"] = list(self._messages)
         state["observed_revision"] = revision
         state["last_error"] = self._last_error
@@ -581,20 +622,36 @@ class CompanionService:
         text = text.strip()
         if not text:
             raise ValueError("instruction text must not be empty")
-        with self._lock:
-            self._pending_instruction = text
-            self._pending_trigger = "instruction"
-            self._pending_playbooks = []
-            self._wake.set()
+        snapshot = copy.deepcopy(self._latest)
+        branch = self.branches.classify(text, snapshot)
+        policy = self.branch_policies.decide(text, snapshot, branch)
         self.agent_memory.record_chat("chat", "user", text)
         self.journal.record(
             "user.instruction",
             text,
             data={"intent_id": self.arbiter.active().intent_id},
         )
+        if policy is not None:
+            return self._apply_policy_decision(policy, branch)
+        with self._lock:
+            self._pending_instruction = text
+            self._pending_trigger = "instruction"
+            self._pending_playbooks = []
+            self._pending_branch = branch
+            self._wake.set()
+        self.journal.record(
+            "task.branch_selected",
+            f"任务进入分支：{branch.name}",
+            data={
+                "branch_id": branch.branch_id,
+                "confidence": branch.confidence,
+                "reason": branch.reason,
+            },
+        )
         state = self.arbiter.snapshot()
         state["messages"] = list(self._messages)
         state["instruction_received"] = True
+        state["decision_branch"] = branch.context()
         state["last_error"] = self._last_error
         return state
 
@@ -604,28 +661,67 @@ class CompanionService:
         if not text:
             raise ValueError("message text must not be empty")
         self.agent_memory.record_chat("chat", "user", text)
-        snapshot = copy.deepcopy(self._latest)
-        match = self.playbooks.match(text, snapshot)
-        if match is not None and match.direct:
-            return self._apply_playbook_match(match)
-        candidates = self.playbooks.candidate_context(text, snapshot)
-        with self._lock:
-            self._pending_instruction = text
-            self._pending_trigger = "chat_or_task"
-            self._pending_playbooks = candidates
-            self._wake.set()
         self.journal.record(
             "user.message",
             text,
             data={"intent_id": self.arbiter.active().intent_id},
         )
+        snapshot = copy.deepcopy(self._latest)
+        match = self.playbooks.match(text, snapshot)
+        if match is not None and match.direct:
+            branch = self.branches.classify(
+                text,
+                snapshot,
+                task_type=match.task_type,
+            )
+            blocked = self.branch_policies.preflight_playbook(
+                text,
+                snapshot,
+                branch,
+                match,
+            )
+            if blocked is not None:
+                policy_branch = self.branches.classify(
+                    "",
+                    snapshot,
+                    intent={"mode": blocked.branch_id},
+                )
+                return self._apply_policy_decision(blocked, policy_branch)
+            return self._apply_playbook_match(match, branch)
+        branch = self.branches.classify(text, snapshot)
+        policy = self.branch_policies.decide(text, snapshot, branch)
+        if policy is not None:
+            return self._apply_policy_decision(policy, branch)
+        candidates = self.playbooks.candidate_context(text, snapshot)
+        with self._lock:
+            self._pending_instruction = text
+            self._pending_trigger = "chat_or_task"
+            self._pending_playbooks = candidates
+            self._pending_branch = branch
+            self._wake.set()
+        self.journal.record(
+            "task.branch_selected",
+            f"任务进入分支：{branch.name}",
+            data={
+                "branch_id": branch.branch_id,
+                "confidence": branch.confidence,
+                "reason": branch.reason,
+            },
+        )
         state = self.arbiter.snapshot()
         state["messages"] = list(self._messages)
         state["message_received"] = True
+        state["decision_branch"] = branch.context()
         state["last_error"] = self._last_error
         return state
 
-    def _apply_playbook_match(self, match: PlaybookMatch) -> dict[str, Any]:
+    def _apply_playbook_match(
+        self,
+        match: PlaybookMatch,
+        branch: BranchMatch | None = None,
+    ) -> dict[str, Any]:
+        if branch is not None and match.intent is not None:
+            self._activate_branch(branch, "playbook")
         previous = self.arbiter.active()
         current = previous
         if match.intent is not None:
@@ -640,6 +736,7 @@ class CompanionService:
                 "character": match.character,
                 "direct": match.direct,
                 "confidence": match.confidence,
+                "branch_id": branch.branch_id if branch is not None else None,
             },
         )
         if match.reply:
@@ -652,6 +749,53 @@ class CompanionService:
         state["messages"] = list(self._messages)
         state["message_received"] = True
         state["playbook_matched"] = match.playbook_id
+        if branch is not None and match.intent is None:
+            state["query_branch"] = branch.context()
+        state["decision_branch"] = (
+            self._active_branch.context()
+            if self._active_branch is not None
+            else None
+        )
+        state["last_error"] = self._last_error
+        return state
+
+    def _apply_policy_decision(
+        self,
+        decision: PolicyDecision,
+        branch: BranchMatch,
+    ) -> dict[str, Any]:
+        self._activate_branch(branch, "branch_policy")
+        self._last_local_policy = decision.to_dict()
+        previous = self.arbiter.active()
+        current = self.arbiter.set(
+            decision.intent,
+            source="branch_policy",
+        )
+        self._record_intent_change(previous, current, "branch_policy")
+        self.journal.record(
+            "task.local_policy",
+            decision.reply,
+            data={
+                "rule_id": decision.rule_id,
+                "branch_id": decision.branch_id,
+                "confidence": decision.confidence,
+                "reason": decision.reason,
+                "intent_id": current.intent_id,
+            },
+        )
+        self._publish_reply(
+            {
+                "text": decision.reply,
+                "expects_response": False,
+            },
+            current.intent_id,
+            "branch_policy",
+        )
+        state = self.arbiter.snapshot()
+        state["messages"] = list(self._messages)
+        state["message_received"] = True
+        state["local_policy_matched"] = decision.rule_id
+        state["decision_branch"] = branch.context()
         state["last_error"] = self._last_error
         return state
 
@@ -696,6 +840,333 @@ class CompanionService:
         self._record_intent_change(previous, current, "manual")
         return self.arbiter.snapshot()
 
+    def wheel_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Execute one validated wheel selection without language inference."""
+        command = normalize_selection(payload)
+        snapshot = copy.deepcopy(self._latest)
+        branch = self.branches.context_for(
+            command.branch_id,
+            task_type="wheel",
+            reason="wheel_selection",
+        )
+        self.journal.record(
+            "wheel.command",
+            "收到轮盘命令",
+            data=command.context(),
+        )
+
+        information_reply = self._wheel_information_reply(command, snapshot)
+        if information_reply is not None:
+            current = self.arbiter.active()
+            self._active_branch = branch
+            self._publish_reply(
+                {"text": information_reply, "expects_response": False},
+                current.intent_id,
+                "wheel",
+            )
+            state = self.arbiter.snapshot()
+            state["messages"] = list(self._messages)
+            state["wheel_command_received"] = True
+            state["decision_branch"] = branch.context()
+            state["last_error"] = self._last_error
+            return state
+
+        policy = self._wheel_policy(command, snapshot, branch)
+        if policy is not None:
+            state = self._apply_policy_decision(policy, branch)
+            state["wheel_command_received"] = True
+            return state
+
+        intent, reply = build_intent(command, snapshot)
+        if intent is None:
+            current = self.arbiter.active()
+            self._active_branch = branch
+            self._publish_reply(
+                {
+                    "text": reply or "这个轮盘操作现在无法执行。",
+                    "expects_response": bool(reply),
+                },
+                current.intent_id,
+                "wheel",
+            )
+            state = self.arbiter.snapshot()
+            state["messages"] = list(self._messages)
+            state["wheel_command_received"] = True
+            state["decision_branch"] = branch.context()
+            state["last_error"] = self._last_error
+            return state
+
+        blocked_target = self._cross_world_target(intent, snapshot)
+        if blocked_target is not None:
+            self._block_cross_world_intent(
+                intent,
+                blocked_target,
+                source="wheel",
+                reply_source="wheel",
+            )
+            state = self.arbiter.snapshot()
+            state["messages"] = list(self._messages)
+            state["wheel_command_received"] = True
+            state["decision_branch"] = branch.context()
+            state["last_error"] = self._last_error
+            return state
+
+        self._activate_branch(branch, "wheel")
+        previous = self.arbiter.active()
+        current = self.arbiter.set(intent, source="wheel")
+        self._record_intent_change(previous, current, "wheel")
+        self._publish_reply(
+            {"text": reply, "expects_response": False},
+            current.intent_id,
+            "wheel",
+        )
+        self.journal.record(
+            "wheel.accepted",
+            reply,
+            data={
+                **command.context(),
+                "intent_id": current.intent_id,
+                "mode": current.mode,
+            },
+        )
+        state = self.arbiter.snapshot()
+        state["messages"] = list(self._messages)
+        state["wheel_command_received"] = True
+        state["decision_branch"] = branch.context()
+        state["last_error"] = self._last_error
+        return state
+
+    def _wheel_policy(
+        self,
+        command: WheelSelection,
+        snapshot: dict[str, Any],
+        branch: BranchMatch,
+    ) -> PolicyDecision | None:
+        text = canonical_text(command)
+        if command.branch_id in {"crafting", "construction"}:
+            recipe_name = command.target_id or ""
+            known = False
+            available = False
+            for recipe in (snapshot.get("capabilities") or {}).get(
+                "known_recipes"
+            ) or []:
+                if not isinstance(recipe, dict):
+                    continue
+                if recipe_name not in {
+                    str(recipe.get("name") or ""),
+                    str(recipe.get("product") or ""),
+                }:
+                    continue
+                known = True
+                available = available or bool(recipe.get("available"))
+            if not available:
+                action_label = (
+                    "制作" if command.branch_id == "crafting" else "建造"
+                )
+                reason = "材料不足" if known else "还没有学会配方"
+                return PolicyDecision(
+                    branch_id=command.branch_id,
+                    rule_id=f"{command.branch_id}.wheel_recipe_blocked",
+                    confidence=0.99,
+                    reply=f"我现在{reason}，不能{action_label}这个物品。",
+                    intent={
+                        "intent_id": (
+                            f"wheel-{command.branch_id}-recipe-blocked"
+                        ),
+                        "mode": "hold",
+                        "lease_seconds": 120,
+                        "reason": "wheel_recipe_unavailable",
+                        "params": {
+                            "wheel_command": True,
+                            "recipe": recipe_name,
+                        },
+                    },
+                    reason="wheel_recipe_unavailable",
+                )
+        if command.branch_id == "combat" and command.action == "guard":
+            hostiles = [
+                entity
+                for entity in snapshot.get("nearby") or []
+                if isinstance(entity, dict) and entity.get("hostile")
+            ]
+            if not hostiles:
+                return None
+            hostiles.sort(
+                key=lambda entity: float(entity.get("distance") or 9999)
+            )
+            prefab = str(hostiles[0].get("prefab") or "")
+            labels = {
+                "frog": "青蛙",
+                "frog_red": "红青蛙",
+                "frog_brightmare": "亮眼青蛙",
+                "spider": "蜘蛛",
+                "spider_warrior": "蜘蛛战士",
+                "spider_hider": "洞穴蜘蛛",
+                "spider_spitter": "喷射蜘蛛",
+                "hound": "猎犬",
+                "firehound": "红猎犬",
+                "icehound": "蓝猎犬",
+                "bunnyman": "兔人",
+                "clockwork_knight": "发条骑士",
+                "clockwork_rook": "发条战车",
+                "clockwork_bishop": "发条主教",
+                "tentacle": "触手",
+                "merm": "鱼人",
+                "pigman": "猪人",
+                "pigguard": "猪人守卫",
+            }
+            label = labels.get(prefab)
+            if label is not None:
+                text = f"帮我打一下这些{label}"
+        if command.branch_id not in {
+            "combat",
+            "crafting",
+            "construction",
+            "survival",
+        }:
+            return None
+        if not text:
+            return None
+        return self.branch_policies.decide(text, snapshot, branch)
+
+    def _wheel_information_reply(
+        self,
+        command: WheelSelection,
+        snapshot: dict[str, Any],
+    ) -> str | None:
+        if command.branch_id == "information":
+            if command.action == "status":
+                companion = snapshot.get("companion") or {}
+                return (
+                    "生命 "
+                    f"{companion.get('health', 0)}/{companion.get('max_health', 0)}，"
+                    "饥饿 "
+                    f"{companion.get('hunger', 0)}/{companion.get('max_hunger', 0)}，"
+                    "精神 "
+                    f"{companion.get('sanity', 0)}/{companion.get('max_sanity', 0)}。"
+                )
+            if command.action == "inventory":
+                return self._wheel_inventory_text(snapshot)
+            if command.action == "task_progress":
+                intent = self.arbiter.active()
+                companion = snapshot.get("companion") or {}
+                loot = companion.get("loot_collection")
+                if isinstance(loot, dict):
+                    return (
+                        f"当前任务是 {intent.mode}，正在收集，"
+                        f"目标 {loot.get('desired_amount', 0)} 个，"
+                        f"已经确认击倒来源 {loot.get('kills', 0)} 个。"
+                    )
+                return f"当前任务是 {intent.mode}，原因：{intent.reason}。"
+            if command.action == "nearby":
+                nearby = [
+                    entity
+                    for entity in snapshot.get("nearby") or []
+                    if isinstance(entity, dict)
+                ]
+                hostiles = sum(
+                    1 for entity in nearby if entity.get("hostile")
+                )
+                resources = sum(
+                    1
+                    for entity in nearby
+                    if entity.get("pickable")
+                    or entity.get("workable")
+                    or entity.get("harvestable")
+                )
+                containers = sum(
+                    1 for entity in nearby if entity.get("container")
+                )
+                return (
+                    f"附近记录到 {len(nearby)} 个实体，"
+                    f"敌人 {hostiles} 个、可采集目标 {resources} 个、"
+                    f"容器 {containers} 个。"
+                )
+            if command.action == "location":
+                companion = snapshot.get("companion") or {}
+                return (
+                    f"我在坐标 "
+                    f"({round(float(companion.get('x') or 0))}, "
+                    f"{round(float(companion.get('z') or 0))})。"
+                )
+
+        if command.branch_id == "base":
+            if command.action == "inventory_status":
+                return self._wheel_inventory_text(snapshot)
+            if command.action == "nearby_storage":
+                containers = [
+                    entity
+                    for entity in snapshot.get("nearby") or []
+                    if isinstance(entity, dict) and entity.get("container")
+                ]
+                if not containers:
+                    return "附近没有发现容器。"
+                counts = []
+                for entity in containers[:5]:
+                    items = entity.get("container_items") or []
+                    counts.append(
+                        f"{entity.get('prefab', '容器')}"
+                        f"（{len(items)} 类可见物品）"
+                    )
+                return "附近容器：" + "、".join(counts) + "。"
+
+        if (
+            command.branch_id == "interaction"
+            and command.action == "nearby_interactions"
+        ):
+            candidates = [
+                entity
+                for entity in snapshot.get("nearby") or []
+                if isinstance(entity, dict)
+                and not entity.get("hostile")
+                and (
+                    entity.get("container")
+                    or entity.get("inventory_item")
+                    or entity.get("pickable")
+                )
+            ]
+            if not candidates:
+                return "附近没有发现可安全互动的目标。"
+            names = [
+                str(entity.get("prefab") or "未知目标")
+                for entity in candidates[:8]
+            ]
+            return "附近可互动的目标有：" + "、".join(names) + "。"
+        return None
+
+    @staticmethod
+    def _wheel_inventory_text(snapshot: dict[str, Any]) -> str:
+        labels = {
+            "cutgrass": "草",
+            "twigs": "树枝",
+            "berries": "浆果",
+            "carrot": "胡萝卜",
+            "goldnugget": "金块",
+            "silk": "蜘蛛丝",
+            "log": "木头",
+            "rocks": "石头",
+            "flint": "燧石",
+            "nightmarefuel": "噩梦燃料",
+            "monstermeat": "怪物肉",
+            "healingsalve": "治疗药膏",
+        }
+        counts = {
+            str(key): int(value)
+            for key, value in (snapshot.get("inventory_counts") or {}).items()
+            if int(value) > 0
+        }
+        if not counts:
+            return "我身上现在没有物品。"
+        ordered = sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        summary = "、".join(
+            f"{labels.get(prefab, prefab)} {count}"
+            for prefab, count in ordered[:12]
+        )
+        return f"我身上的物资：{summary}。"
+
     def state(self) -> dict[str, Any]:
         result = self.arbiter.snapshot()
         character_selection = self.character_selection()
@@ -708,6 +1179,12 @@ class CompanionService:
                 "log_path": str(self.journal.latest_path),
                 "companion_character": character_selection["prefab"],
                 "character_selection": character_selection,
+                "decision_branch": (
+                    self._active_branch.context()
+                    if self._active_branch is not None
+                    else None
+                ),
+                "last_local_policy": self._last_local_policy,
             }
         )
         return result
@@ -943,6 +1420,9 @@ class CompanionService:
                 "combat_target_defeated": "微光击败了战斗目标",
                 "combat_target_lost": "微光跟丢了战斗目标",
                 "world_transition": "微光已随你完成世界切换",
+                "companion_dead": "微光被打倒了，正在附近重新凝聚",
+                "tactical_spell": "微光使用了战术法术",
+                "tactical_spell_unavailable": "微光的战术法术暂时无法使用",
                 "recovery_started": "微光开始自主恢复状态",
                 "recovery_completed": "微光完成自主恢复",
                 "recovery_unavailable": "微光当前无法安全自主恢复",
@@ -972,6 +1452,16 @@ class CompanionService:
                     + recovery_unavailable_detail(event)
                     + "）"
                 )
+            elif event_type == "tactical_spell":
+                spell_name = {
+                    "shadow_duelist": "暗影决斗者",
+                    "shadow_sneak": "暗影蝶",
+                    "shadow_prison": "暗影牢笼",
+                }.get(
+                    str(event.get("spell") or ""),
+                    str(event.get("spell") or "暗影法术"),
+                )
+                message = f"微光施放了{spell_name}"
             elif event_type == "emergency_detected":
                 message = self._emergency_announcement(event, "detected")
             elif event_type == "emergency_action":
@@ -995,6 +1485,7 @@ class CompanionService:
                 "emergency_detected",
                 "emergency_action",
                 "emergency_resolved",
+                "tactical_spell",
             }:
                 message += f"（{reason}）"
             data = {
@@ -1268,6 +1759,25 @@ class CompanionService:
             },
         )
 
+    def _activate_branch(self, branch: BranchMatch, source: str) -> None:
+        with self._lock:
+            previous = self._active_branch
+            self._active_branch = branch
+            if self._latest:
+                self._latest["decision_branch"] = branch.context()
+        if previous is not None and previous.branch_id == branch.branch_id:
+            return
+        self.journal.record(
+            "task.branch_selected",
+            f"任务进入分支：{branch.name}",
+            data={
+                "branch_id": branch.branch_id,
+                "confidence": branch.confidence,
+                "reason": branch.reason,
+                "source": source,
+            },
+        )
+
     def _decision_loop(self) -> None:
         while not self._stopping.is_set():
             timeout = (
@@ -1286,11 +1796,20 @@ class CompanionService:
                 instruction = self._pending_instruction
                 trigger = self._pending_trigger
                 matched_playbooks = self._pending_playbooks
+                pending_branch = self._pending_branch
                 self._pending_playbooks = []
+                self._pending_branch = None
             if not snapshot:
                 continue
             if instruction and matched_playbooks:
                 snapshot["matched_playbooks"] = matched_playbooks
+            if pending_branch is not None:
+                snapshot["decision_branch"] = pending_branch.context()
+            elif instruction:
+                snapshot["decision_branch"] = self.branches.classify(
+                    instruction,
+                    snapshot,
+                ).context()
             if observed_revision == self._last_decision_snapshot and not instruction:
                 continue
 
@@ -1309,7 +1828,12 @@ class CompanionService:
                         self.arbiter.active().to_dict(),
                         instruction,
                     )
-                self._apply_response(response, force_chat_only=False)
+                self._apply_response(
+                    response,
+                    force_chat_only=False,
+                    branch=pending_branch,
+                    instruction=instruction,
+                )
                 with self._lock:
                     if instruction == self._pending_instruction:
                         self._pending_instruction = None
@@ -1424,6 +1948,8 @@ class CompanionService:
         response: dict[str, Any],
         force_chat_only: bool,
         reply_source: str = "task",
+        branch: BranchMatch | None = None,
+        instruction: str | None = None,
     ) -> None:
         current = self.arbiter.active()
         intent = current
@@ -1556,6 +2082,23 @@ class CompanionService:
                 intent = current
             if intent is not current:
                 self._record_intent_change(current, intent, "deepseek")
+                if branch is not None and intent.mode in {
+                    "follow",
+                    "hold",
+                    "speak",
+                    "use_skill",
+                    "equip",
+                    "unequip",
+                }:
+                    resolved_branch = branch
+                else:
+                    resolved_branch = self.branches.classify(
+                        instruction or "",
+                        self._latest,
+                        intent=intent.to_dict(),
+                        task_type=branch.task_type if branch is not None else None,
+                    )
+                self._activate_branch(resolved_branch, "deepseek")
 
         reply = response.get("reply")
         if isinstance(reply, dict) and reply.get("text"):

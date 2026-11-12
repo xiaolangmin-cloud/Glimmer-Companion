@@ -40,6 +40,7 @@ local REMOTE_TASK_MODES = {
     move_to_landmark = true,
     fetch_item = true,
     collect_loot = true,
+    deliver_item = true,
     harvest_area = true,
     gather = true,
     operate = true,
@@ -47,7 +48,9 @@ local REMOTE_TASK_MODES = {
 
 local SKILL_ACTION_NAMES = {
     "CASTSPELL",
+    "CAST_SPELLBOOK",
     "CAST_POCKETWATCH",
+    "CLOSESPELLBOOK",
     "USEITEM",
     "USEITEMON",
     "USEEQUIPPEDITEM",
@@ -59,6 +62,18 @@ local SKILL_ACTION_NAMES = {
     "MODSLINGSHOT",
     "STOPMODSLINGSHOT",
 }
+
+local CODEX_UMBRA_PREFAB = "waxwelljournal"
+local CODEX_SPELL_DUELIST = 2
+local CODEX_SPELL_SNEAK = 3
+local CODEX_SPELL_PRISON = 4
+local CODEX_MIN_SANITY_PERCENT = 0.3
+local CODEX_MIN_FUEL_PERCENT = 0.05
+local CODEX_SPELL_COOLDOWN_SECONDS = 9
+local CODEX_NOTICE_COOLDOWN_SECONDS = 30
+local CODEX_GOOD_ARMOR_ABSORB = 0.6
+local CODEX_GOOD_WEAPON_DAMAGE = 25
+local CODEX_SAFE_HITS = 4
 
 local function Round(value, places)
     local mult = 10 ^ (places or 2)
@@ -296,6 +311,8 @@ local CodexCompanionBrain = Class(Brain, function(self, inst)
     self.last_combat_repath_at = 0
     self.combat_best_distance = nil
     self.combat_last_progress_at = nil
+    self.next_codex_spell_at = 0
+    self.last_codex_notice_at = -math.huge
     self.skill_state = nil
     self.craft_state = nil
     self.build_state = nil
@@ -1836,6 +1853,183 @@ function CodexCompanionBrain:EnsureCombatEquipment(target)
     end
 end
 
+function CodexCompanionBrain:NotifyCodexSpellUnavailable(reason)
+    local now = GetTime()
+    if now - self.last_codex_notice_at < CODEX_NOTICE_COOLDOWN_SECONDS then
+        return
+    end
+    self.last_codex_notice_at = now
+
+    local messages = {
+        sanity_low = "我的理智不够了，继续用暗影法典会失控。",
+        no_fuel = "暗影法典里没有噩梦燃料了。",
+        duelist_full = "暗影随从已经到上限了。",
+        cannot_cast = "这里没法展开暗影法术。",
+    }
+    local message = messages[reason]
+    if message ~= nil then
+        table.insert(self.speech_queue, message)
+    end
+    self:QueueEvent("tactical_spell_unavailable", {
+        spell = "codex_umbra",
+        reason = reason,
+    })
+end
+
+function CodexCompanionBrain:TryCodexUmbraCombatSpell(
+    target,
+    threat_count,
+    category
+)
+    if self.inst.prefab ~= "waxwell" then
+        return false, "not_waxwell"
+    end
+    local now = GetTime()
+    if now < self.next_codex_spell_at then
+        return false, "cooldown"
+    end
+    if target == nil
+        or not target:IsValid()
+        or target.components.health == nil
+        or target.components.health:IsDead()
+    then
+        return false, "target_missing"
+    end
+
+    local book = FindInventoryItem(self.inst, CODEX_UMBRA_PREFAB)
+    local spellbook = book ~= nil and book.components.spellbook or nil
+    local aoespell = book ~= nil and book.components.aoespell or nil
+    local fueled = book ~= nil and book.components.fueled or nil
+    if spellbook == nil or aoespell == nil or fueled == nil then
+        return false, "book_missing"
+    end
+
+    local health = self.inst.components.health
+    local current_health = health ~= nil and health.currenthealth or nil
+    local health_percent = health ~= nil and health.maxhealth > 0
+        and health.currenthealth / health.maxhealth
+        or 1
+    local incoming_damage = EstimateIncomingDamage(target, self.inst)
+    local survivable_hits = current_health ~= nil
+        and incoming_damage ~= nil
+        and incoming_damage > 0
+        and current_health / incoming_damage
+        or math.huge
+    local threats = tonumber(threat_count) or 1
+    local best_weapon, best_armor = self:FindBestEquipment(target)
+    local weapon_damage = best_weapon ~= nil
+        and best_weapon.components.weapon ~= nil
+        and best_weapon.components.weapon:GetDamage(self.inst, target)
+        or 0
+    if type(weapon_damage) ~= "number" then
+        weapon_damage = 0
+    end
+    local armor_absorb = best_armor ~= nil
+        and best_armor.components.armor ~= nil
+        and best_armor.components.armor.absorb_percent
+        or 0
+    local is_boss = target:HasTag("epic")
+        or target:HasTag("boss")
+        or (target.components.health.maxhealth or 0) >= 1000
+    local urgent = category == "lethal_threat"
+        or health_percent <= 0.35
+        or is_boss
+        or threats >= 3
+    local gear_sufficient = armor_absorb >= CODEX_GOOD_ARMOR_ABSORB
+        and weapon_damage >= CODEX_GOOD_WEAPON_DAMAGE
+        and survivable_hits >= math.max(CODEX_SAFE_HITS, threats * 2)
+    if not urgent or gear_sufficient then
+        return false, "gear_sufficient"
+    end
+
+    local sanity = self.inst.components.sanity
+    local sanity_percent = sanity ~= nil and sanity.max > 0
+        and sanity.current / sanity.max
+        or 1
+    if fueled:IsEmpty()
+        or fueled:GetPercent() < CODEX_MIN_FUEL_PERCENT
+    then
+        self:NotifyCodexSpellUnavailable("no_fuel")
+        self.next_codex_spell_at = now + CODEX_NOTICE_COOLDOWN_SECONDS
+        return false, "no_fuel"
+    end
+
+    local petleash = self.inst.components.petleash
+    local duelist_count = petleash ~= nil
+        and petleash:GetNumPetsForPrefab("shadowprotector")
+        or 0
+    local can_summon_duelist = petleash ~= nil
+        and not petleash:IsFull()
+        and duelist_count < 1
+    local spell_index
+    local spell_name
+    if can_summon_duelist
+        and sanity_percent >= CODEX_MIN_SANITY_PERCENT
+    then
+        spell_index = CODEX_SPELL_DUELIST
+        spell_name = "shadow_duelist"
+    elseif is_boss or category == "lethal_threat" then
+        spell_index = CODEX_SPELL_PRISON
+        spell_name = "shadow_prison"
+    elseif threats >= 2 then
+        spell_index = CODEX_SPELL_SNEAK
+        spell_name = "shadow_sneak"
+    elseif can_summon_duelist then
+        self:NotifyCodexSpellUnavailable("sanity_low")
+        self.next_codex_spell_at = now + CODEX_NOTICE_COOLDOWN_SECONDS
+        return false, "sanity_low"
+    else
+        self:NotifyCodexSpellUnavailable("duelist_full")
+        self.next_codex_spell_at = now + CODEX_SPELL_COOLDOWN_SECONDS
+        return false, "duelist_full"
+    end
+
+    if not spellbook:SelectSpell(spell_index) then
+        return false, "spell_selection_failed"
+    end
+    local x, _, z = target.Transform:GetWorldPosition()
+    local pos = Vector3(x, 0, z)
+    if not aoespell:CanCast(self.inst, pos) then
+        self:NotifyCodexSpellUnavailable("cannot_cast")
+        self.next_codex_spell_at = now + CODEX_SPELL_COOLDOWN_SECONDS
+        return false, "cannot_cast"
+    end
+
+    local success, reason = aoespell:CastSpell(self.inst, pos)
+    if not success then
+        return false, reason or "cast_failed"
+    end
+
+    self.next_codex_spell_at = now + CODEX_SPELL_COOLDOWN_SECONDS
+    local fuel_percent = fueled:GetPercent()
+    self:QueueEvent("tactical_spell", {
+        spell = spell_name,
+        target_prefab = target.prefab,
+        threat_count = threat_count,
+        sanity_percent = Round(sanity_percent * 100),
+        fuel_percent = fuel_percent ~= nil
+            and Round(fuel_percent * 100)
+            or nil,
+    })
+
+    if spell_name == "shadow_duelist"
+        and petleash ~= nil
+        and petleash.GetPetsWithPrefab ~= nil
+    then
+        for _, pet in pairs(petleash:GetPetsWithPrefab("shadowprotector") or {}) do
+            if pet:IsValid() and pet.components.combat ~= nil then
+                pet.components.combat:SetTarget(target)
+            end
+        end
+        table.insert(self.speech_queue, "去吧，暗影决斗者，替我挡住它们。")
+    elseif spell_name == "shadow_sneak" then
+        table.insert(self.speech_queue, "散开吧，暗影蝶。")
+    elseif spell_name == "shadow_prison" then
+        table.insert(self.speech_queue, "起来吧，暗影牢笼。")
+    end
+    return true, spell_name
+end
+
 function CodexCompanionBrain:Combat(intent)
     local params = type(intent.params) == "table" and intent.params or {}
     local player = GetPrimaryPlayer(self.inst)
@@ -1920,6 +2114,7 @@ function CodexCompanionBrain:Combat(intent)
     local current_health = self.inst.components.health ~= nil
         and self.inst.components.health.currenthealth
         or nil
+    self:TryCodexUmbraCombatSpell(target, 1, "combat")
     local incoming_damage = EstimateIncomingDamage(target, self.inst)
     if retreat_allowed
         and current_health ~= nil
@@ -3153,6 +3348,22 @@ function CodexCompanionBrain:HandleEmergency(state, intent)
 
     local category = state.category
     local threats = state.threats or {}
+    if category == "lethal_threat"
+        or category == "hound_wave"
+        or category == "frog_rain"
+        or category == "hostile_group"
+        or category == "nightmare_riot"
+        or category == "attacked"
+    then
+        local spell_target = threats[1] ~= nil and threats[1].entity or nil
+        if spell_target ~= nil and spell_target:IsValid() then
+            self:TryCodexUmbraCombatSpell(
+                spell_target,
+                state.threat_count or #threats,
+                category
+            )
+        end
+    end
     if category == "lethal_threat" then
         local target = threats[1] ~= nil and threats[1].entity or nil
         self:EmergencyRetreat("lethal_next_hit", target)
@@ -4115,6 +4326,29 @@ function CodexCompanionBrain:AreaTask(intent, mode)
         }
     end
     local params = type(intent.params) == "table" and intent.params or {}
+    local desired_amount = tonumber(params.amount)
+    if desired_amount ~= nil
+        and (self.area_state.count or 0) >= desired_amount
+    then
+        local requested = intent.target_prefab
+            or params.target_prefab
+            or (
+                type(params.target_prefabs) == "table"
+                and params.target_prefabs[1]
+                or nil
+            )
+        self:QueueEvent("task_complete", {
+            intent_id = intent.intent_id,
+            mode = mode,
+            target_prefab = requested,
+            amount = self.area_state.count or 0,
+            desired_amount = desired_amount,
+            verified = true,
+        })
+        self:SuppressIntent(intent)
+        self.area_state = nil
+        return
+    end
     if intent.position ~= nil and not self.area_state.arrived then
         local arrived = self:NavigateTo(
             intent,
@@ -4406,6 +4640,84 @@ function CodexCompanionBrain:Eat()
     end
 end
 
+function CodexCompanionBrain:DeliverItem(intent)
+    local params = type(intent.params) == "table" and intent.params or {}
+    local prefab = intent.target_prefab or params.item_prefab
+    if type(prefab) ~= "string" or prefab == "" then
+        self:FailAction(intent, "deliver_item_missing")
+        return
+    end
+    local desired = math.max(1, tonumber(params.amount) or 1)
+    if self.deliver_state == nil
+        or self.deliver_state.intent_id ~= intent.intent_id
+    then
+        self.deliver_state = {
+            intent_id = intent.intent_id,
+            prefab = prefab,
+            amount = desired,
+            initial_count = InventoryCount(self.inst, prefab),
+            stage = "travel",
+            started_at = GetTime(),
+        }
+    end
+    local state = self.deliver_state
+    if (state.initial_count or 0) < desired then
+        self.deliver_state = nil
+        self:FailAction(intent, "deliver_item_not_enough")
+        return
+    end
+    local player = GetPrimaryPlayer(self.inst)
+    if player == nil or not player:IsValid() then
+        self.deliver_state = nil
+        self:FailAction(intent, "player_missing")
+        return
+    end
+    if state.stage == "travel" then
+        local px, _, pz = player.Transform:GetWorldPosition()
+        if self:NavigateTo(intent, px, pz, 3, "deliver_travel") then
+            state.stage = "giving"
+            state.give_started_at = GetTime()
+        end
+        return
+    end
+    local current = InventoryCount(self.inst, prefab)
+    if current <= (state.initial_count or 0) - desired then
+        self:QueueEvent("task_complete", {
+            intent_id = intent.intent_id,
+            mode = "deliver_item",
+            item_prefab = prefab,
+            amount = desired,
+            verified = true,
+        })
+        self:SuppressIntent(intent)
+        self.deliver_state = nil
+        return
+    end
+    if GetTime() - (state.give_started_at or GetTime()) > 8 then
+        self.deliver_state = nil
+        self:FailAction(intent, "player_inventory_full")
+        return
+    end
+    if self.inst.sg ~= nil and self.inst.sg:HasStateTag("busy") then
+        return
+    end
+    local item = FindInventoryItem(self.inst, prefab)
+    if item == nil then
+        self.deliver_state = nil
+        self:FailAction(intent, "deliver_item_not_found")
+        return
+    end
+    local stackable = item.components.stackable
+    if stackable ~= nil and stackable:StackSize() > desired then
+        item = stackable:SplitStack(desired) or item
+    end
+    self.inst:ClearBufferedAction()
+    self.inst.components.locomotor:PushAction(
+        BufferedAction(self.inst, player, ACTIONS.GIVETOPLAYER, item),
+        true
+    )
+end
+
 function CodexCompanionBrain:Retreat(intent)
     local arrived = false
     if intent.position ~= nil then
@@ -4547,6 +4859,8 @@ function CodexCompanionBrain:Act()
         self:RememberLocation(intent)
     elseif intent.mode == "fetch_item" then
         self:FetchItem(intent)
+    elseif intent.mode == "deliver_item" then
+        self:DeliverItem(intent)
     elseif intent.mode == "move_to_landmark" then
         local landmark = self:ResolveLandmark(intent)
         if landmark == nil then

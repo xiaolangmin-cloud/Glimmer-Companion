@@ -26,6 +26,7 @@ class Settings:
     default_lease_seconds: float
     agent_memory_db: Path | None = None
     playbook_dir: Path | None = None
+    decision_branch_config: Path | None = None
     companion_character: str = "waxwell"
 
     @classmethod
@@ -84,6 +85,12 @@ class Settings:
                 os.getenv(
                     "CODEX_COMPANION_PLAYBOOKS",
                     str(PROJECT_ROOT / "config" / "playbooks"),
+                )
+            ),
+            decision_branch_config=Path(
+                os.getenv(
+                    "CODEX_COMPANION_DECISION_BRANCHES",
+                    str(PROJECT_ROOT / "config" / "decision_branches.json"),
                 )
             ),
             companion_character=os.getenv(

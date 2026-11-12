@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $desktop = [Environment]::GetFolderPath("Desktop")
 $shortcutPath = Join-Path $desktop "Don't Starve Together - 微光.lnk"
 $bridgePidPath = Join-Path $PSScriptRoot "state\companion_bridge.pid"

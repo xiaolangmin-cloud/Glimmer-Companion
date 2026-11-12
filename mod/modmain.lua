@@ -4,6 +4,8 @@ GLOBAL._codex_companion_chat_hook_installed = false
 local recent_chat_posts = {}
 local tonumber = GLOBAL.tonumber
 local next = GLOBAL.next
+local glimmer_controls = nil
+local glimmer_command_wheel = nil
 local COMPANION_CHARACTER_NAMES = {
     player = "玩家当前角色",
     waxwell = "麦斯威尔",
@@ -248,6 +250,124 @@ AnnounceControllerStatus = function(message)
             nil,
             "default"
         )
+    end
+end
+
+local function IsDefaultCompanionScreen()
+    if GLOBAL.TheFrontEnd == nil or GLOBAL.ThePlayer == nil then
+        return false
+    end
+    local screen = GLOBAL.TheFrontEnd:GetActiveScreen()
+    local screen_name = screen ~= nil and screen.name or ""
+    if not screen_name:find("HUD")
+        or GLOBAL.ThePlayer.HUD == nil
+        or GLOBAL.ThePlayer.HUD:IsChatInputScreenOpen()
+    then
+        return false
+    end
+    local hud = GLOBAL.ThePlayer.HUD
+    if hud.writeablescreen ~= nil then
+        return false
+    end
+    local controls = hud.controls
+    local crafting = controls ~= nil
+        and controls.craftingmenu
+        or nil
+    local search_box = crafting ~= nil
+        and crafting.craftingmenu
+        and crafting.craftingmenu.search_box
+        or nil
+    return not (
+        search_box ~= nil
+        and search_box.textbox ~= nil
+        and search_box.textbox.editing
+    )
+end
+
+local function SubmitWheelCommand(command)
+    if command == nil
+        or MOD_RPC == nil
+        or MOD_RPC.GlimmerWheel == nil
+        or MOD_RPC.GlimmerWheel.SubmitCommand == nil
+    then
+        return
+    end
+    SendModRPCToServer(
+        MOD_RPC.GlimmerWheel.SubmitCommand,
+        GLOBAL.json.encode(command)
+    )
+end
+
+local function PostWheelCommand(player, encoded)
+    local world = GLOBAL.TheWorld
+    if world == nil
+        or not world.ismastersim
+        or player == nil
+        or not player:IsValid()
+        or player:HasTag(COMPANION_TAG)
+    then
+        return
+    end
+    local owner = world._codex_primary_player
+    if owner ~= nil and player ~= owner then
+        return
+    end
+    if type(encoded) ~= "string"
+        or encoded == ""
+        or #encoded > 2048
+    then
+        return
+    end
+    local now = GLOBAL.GetTime()
+    if now - (player._codex_last_wheel_command_at or -math.huge) < 0.25 then
+        return
+    end
+    player._codex_last_wheel_command_at = now
+    local command = GLOBAL.json.decode(encoded)
+    if type(command) ~= "table" or command.schema ~= 1 then
+        AnnounceControllerStatus("轮盘命令格式无效。")
+        return
+    end
+    GLOBAL.TheSim:QueryServer(
+        GetBridgeURL() .. "/wheel-command",
+        function(_, success)
+            if not success then
+                AnnounceControllerStatus(
+                    "轮盘命令没有送达控制器，请检查本地控制器连接。"
+                )
+            end
+        end,
+        "POST",
+        GLOBAL.json.encode(command)
+    )
+end
+
+AddModRPCHandler(
+    "GlimmerWheel",
+    "SubmitCommand",
+    function(player, encoded)
+        PostWheelCommand(player, encoded)
+    end
+)
+
+local function ToggleCompanionWheel()
+    if not IsDefaultCompanionScreen() or glimmer_command_wheel == nil then
+        return
+    end
+    if glimmer_controls ~= nil
+        and (
+            glimmer_controls.commandwheel ~= nil
+            and glimmer_controls.commandwheel:IsOpen()
+            or glimmer_controls.spellwheel ~= nil
+            and glimmer_controls.spellwheel:IsOpen()
+        )
+    then
+        return
+    end
+    if glimmer_command_wheel:IsOpen() then
+        glimmer_command_wheel:Close()
+    else
+        glimmer_command_wheel:Open()
     end
 end
 
@@ -747,6 +867,10 @@ local function PlaceCompanionNearPlayer(companion, player)
     else
         companion.Transform:SetPosition(tx, 0, tz)
     end
+    print(
+        "[Glimmer Companion] placed near primary player",
+        string.format("%.1f", math.sqrt((tx - x) ^ 2 + (tz - z) ^ 2))
+    )
 end
 
 local function PlayCompanionSpawnEffect(companion)
@@ -778,6 +902,78 @@ local function PlayCompanionSpawnEffect(companion)
             companion.AnimState:SetMultColour(1, 1, 1, 1)
         end
     end)
+end
+
+local function GetDeathSourceName(data)
+    local afflicter = data ~= nil and data.afflicter or nil
+    local prefab = afflicter ~= nil and afflicter.prefab or nil
+    if prefab == nil then
+        return nil
+    end
+    local names = GLOBAL.STRINGS ~= nil and GLOBAL.STRINGS.NAMES or nil
+    return names ~= nil and names[string.upper(prefab)] or prefab
+end
+
+local function OnCompanionDeath(inst, data)
+    if inst == nil or inst._codex_death_scheduled then
+        return
+    end
+    inst._codex_death_scheduled = true
+    inst._codex_skip_state_save = true
+
+    local source_name = GetDeathSourceName(data)
+    local message
+    if data ~= nil and data.cause == "cold" then
+        message = "好冷……我撑不住了！我缓几秒就回来。"
+    elseif data ~= nil and data.cause == "fire" then
+        message = "好烫！我被烧倒了……我缓几秒就回来。"
+    elseif source_name ~= nil then
+        message = "呜……我被" .. source_name .. "打倒了！我缓几秒就回来。"
+    else
+        message = "呜……我倒下了！我缓几秒就回来。"
+    end
+
+    if inst.components.talker ~= nil and inst:IsValid() then
+        inst.components.talker:Say(message, 5)
+    end
+    if GLOBAL.TheNet ~= nil then
+        GLOBAL.TheNet:Announce(
+            "[微光] " .. message,
+            nil,
+            nil,
+            "default"
+        )
+    end
+
+    local player = GetPrimaryPlayer(inst)
+    local world = GLOBAL.TheWorld
+    if player == nil or not player:IsValid() or world == nil then
+        return
+    end
+
+    -- The server-side survivor does not own a client connection, so its ghost
+    -- artwork can be invisible. Re-form it nearby after a short visible delay.
+    world:DoTaskInTime(5, function()
+        if world ~= GLOBAL.TheWorld
+            or not player:IsValid()
+            or world._codex_companion_migrating
+        then
+            return
+        end
+        if world._codex_companion == inst then
+            world._codex_companion = nil
+        end
+        if inst:IsValid() then
+            inst:Remove()
+        end
+        TrySpawnCompanion(player)
+    end)
+end
+
+local function AttachCompanionDeathBehavior(companion)
+    if companion ~= nil and companion:IsValid() then
+        companion:ListenForEvent("death", OnCompanionDeath)
+    end
 end
 
 local function CreateCompanionEntity(player, record)
@@ -861,17 +1057,15 @@ local function FinishCompanionSpawn(
         and saved_landmarks
         or {}
 
-    if migration_state ~= nil
-        or record == nil
-        or GLOBAL.TheWorld._codex_controller_connection_ready
-    then
-        PlaceCompanionNearPlayer(companion, player)
-    end
+    -- Loading a saved survivor must not restore its old position before the
+    -- controller is ready. Otherwise 微光 can appear far away from the player.
+    PlaceCompanionNearPlayer(companion, player)
     PlayCompanionSpawnEffect(companion)
     if legacy_state ~= nil then
         ApplyLegacyCompanionState(companion, legacy_state)
     end
 
+    AttachCompanionDeathBehavior(companion)
     companion:SetBrain(require("brains/codex_companion_brain"))
     companion:RestartBrain()
     if migration_state ~= nil and companion.brain ~= nil then
@@ -1230,3 +1424,51 @@ AddPlayerPostInit(function(inst)
     end
     inst:DoTaskInTime(1, SpawnWhenWorldReady)
 end)
+
+if GLOBAL.TheNet ~= nil and GLOBAL.TheNet:GetIsClient() then
+    AddClassPostConstruct("widgets/controls", function(controls)
+        glimmer_controls = controls
+        if controls.top_root == nil
+            or controls.owner == nil
+            or glimmer_command_wheel ~= nil
+        then
+            return
+        end
+        local GlimmerCommandWheel =
+            require "widgets/glimmer_command_wheel"
+        local wheel_root = controls.commandwheelroot
+            or controls.top_root
+        glimmer_command_wheel = wheel_root:AddChild(
+            GlimmerCommandWheel(controls.owner, SubmitWheelCommand)
+        )
+        glimmer_command_wheel:SetScale(GLOBAL.TheFrontEnd:GetHUDScale())
+        glimmer_command_wheel:Hide()
+    end)
+
+    local wheel_key_name = GetModConfigData("wheel_key") or "KEY_F8"
+    local wheel_key = GLOBAL[wheel_key_name]
+    if type(wheel_key) == "number" then
+        GLOBAL.TheInput:AddKeyUpHandler(
+            wheel_key,
+            ToggleCompanionWheel
+        )
+    end
+
+    AddComponentPostInit("playercontroller", function(controller, inst)
+        if inst ~= GLOBAL.ThePlayer then
+            return
+        end
+        local original_on_control = controller.OnControl
+        controller.OnControl = function(self, control, down)
+            if glimmer_command_wheel ~= nil
+                and glimmer_command_wheel:IsOpen()
+            then
+                if down and control == GLOBAL.CONTROL_CANCEL then
+                    glimmer_command_wheel:OnCancel()
+                end
+                return true
+            end
+            return original_on_control(self, control, down)
+        end
+    end)
+end

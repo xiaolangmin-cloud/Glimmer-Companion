@@ -5,10 +5,11 @@ description = [[
 不建立第二名玩家连接，不修改服务器人数，兼容独行长路。
 微光拥有独立的服务端模拟区域，远距离任务不会因玩家离开而停摆。
 执行层执行控制器下发的任务；无任务跟随时会按确定性规则自行进食、治疗和睡觉，
-不会另行改变任务目标。
+不会另行改变任务目标。麦斯威尔会先判断武器、护甲和敌群压力，只有普通装备明显
+不足以安全处理时才使用暗影法典，并检查理智、燃料和随从数量。
 ]]
 author = "xiaolangmin-cloud"
-version = "0.18.0"
+version = "0.19.0"
 forumthread = ""
 
 api_version = 10
@@ -20,7 +21,7 @@ hamlet_compatible = false
 dst_compatible = true
 
 client_only_mod = false
-server_only_mod = true
+server_only_mod = false
 all_clients_require_mod = false
 
 server_filter_tags = {}
@@ -91,5 +92,19 @@ configuration_options = {
             { description = "40", data = 40 },
         },
         default = 30,
+    },
+    {
+        name = "wheel_key",
+        label = "Command wheel key",
+        options = {
+            { description = "F8 (recommended)", data = "KEY_F8" },
+            { description = "F6", data = "KEY_F6" },
+            { description = "F7", data = "KEY_F7" },
+            { description = "F9", data = "KEY_F9" },
+            { description = "R", data = "KEY_R" },
+            { description = "G", data = "KEY_G" },
+            { description = "V", data = "KEY_V" },
+        },
+        default = "KEY_F8",
     },
 }

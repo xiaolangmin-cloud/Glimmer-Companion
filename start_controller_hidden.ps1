@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $env:PYTHONUTF8 = "1"
 $env:DEEPSEEK_API_KEY = [Environment]::GetEnvironmentVariable(

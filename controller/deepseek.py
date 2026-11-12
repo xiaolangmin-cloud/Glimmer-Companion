@@ -181,6 +181,12 @@ class DeepSeekPlanner:
                         + (user_instruction or "无，当前只需处理重大事件")
                         + "\n\n本轮触发原因：\n"
                         + trigger
+                        + "\n\n本地任务分支与预载决策规则：\n"
+                        + json.dumps(
+                            model_snapshot.get("decision_branch") or {},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
                         + "\n\n可能相关的长期记忆：\n"
                         + (memory_context or "无")
                         + "\n\n微光独立技能记忆（不是用户个人记忆）：\n"
