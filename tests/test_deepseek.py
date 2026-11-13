@@ -27,8 +27,15 @@ class _AgentMemory:
     def active_plan(self) -> None:
         return None
 
-    def recent_chat(self, _room: str, limit: int = 10) -> list[object]:
-        return []
+    def chat_context(
+        self,
+        _room: str,
+        *,
+        recent_limit: int = 10,
+        max_recent_chars: int = 6000,
+        max_summary_chars: int = 2500,
+    ) -> dict[str, object]:
+        return {"summary": "", "recent": []}
 
     def world_context(
         self,

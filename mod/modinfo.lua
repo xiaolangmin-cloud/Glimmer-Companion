@@ -9,7 +9,7 @@ description = [[
 不足以安全处理时才使用暗影法典，并检查理智、燃料和随从数量。
 ]]
 author = "xiaolangmin-cloud"
-version = "0.19.0"
+version = "0.19.4"
 forumthread = ""
 
 api_version = 10
@@ -97,14 +97,19 @@ configuration_options = {
         name = "wheel_key",
         label = "Command wheel key",
         options = {
-            { description = "F8 (recommended)", data = "KEY_F8" },
-            { description = "F6", data = "KEY_F6" },
-            { description = "F7", data = "KEY_F7" },
-            { description = "F9", data = "KEY_F9" },
-            { description = "R", data = "KEY_R" },
-            { description = "G", data = "KEY_G" },
-            { description = "V", data = "KEY_V" },
+            {
+                description = "Mouse 5 / 2nd side button from top (recommended)",
+                data = "MOUSEBUTTON_5",
+            },
+            {
+                description = "Mouse 4 / first side button",
+                data = "MOUSEBUTTON_4",
+            },
+            {
+                description = "Middle mouse button",
+                data = "MOUSEBUTTON_MIDDLE",
+            },
         },
-        default = "KEY_F8",
+        default = "MOUSEBUTTON_5",
     },
 }

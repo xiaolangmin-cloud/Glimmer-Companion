@@ -7,9 +7,13 @@ from typing import Any
 
 from .decision_branches import BranchMatch
 from .playbooks import PlaybookMatch
+from .strategy_advisor import ARMOR_PROFILE
 
 
 FORCE_COMBAT = re.compile(r"死战|别逃|不要逃|不用管危险|务必打|一定打")
+RETREAT_COMMAND = re.compile(
+    r"撤退|快跑|别追|不要追|回来|停止战斗|停手|别打了|不要打了"
+)
 
 FIST_DAMAGE = 10
 
@@ -24,17 +28,6 @@ WEAPON_DAMAGE = {
     "axe": 27.2,
     "pickaxe": 27.2,
     "walter_slingshot": 17,
-}
-
-ARMOR_ABSORB = {
-    "armorwood": 0.8,
-    "armorfootball": 0.8,
-    "armormarble": 0.95,
-    "armornight": 0.95,
-    "armordragonfly": 0.8,
-    "armor_ruins": 0.9,
-    "armor_sanity": 0.8,
-    "armor_lunarplant": 0.9,
 }
 
 TARGET_ALIASES = {
@@ -167,6 +160,23 @@ HEALING_ITEMS = {
     "tallbirdegg_cooked",
 }
 
+HOME_ESTABLISH = re.compile(
+    r"(?:这里|这儿).{0,8}(?:是|当作|作为|算).{0,4}(?:我的|你的|咱们的)?"
+    r"(?:家|基地|营地|据点)"
+    r"|把(?:这里|这儿).{0,10}(?:记|当|设).{0,6}(?:家|基地|营地|据点)"
+)
+HOME_RETURN = re.compile(r"回家|回基地|回营地|回据点|回仓库")
+HOME_NAMES = ("家", "基地", "营地", "据点", "仓库")
+HOME_CHORE_REQUEST = re.compile(
+    r"(?:家里|基地|营地|据点).{0,12}(?:收拾|整理|打扫|清点|维护|干活)"
+    r"|(?:收拾|整理|打扫|清点|维护).{0,10}(?:家|基地|营地|据点)"
+    r"|自己看着办|随便找点活干|找点家务做"
+)
+GLOM_MER_REQUEST = re.compile(
+    r"(?:接|带|领|找|抓|收).{0,8}格罗姆"
+    r"|格罗姆.{0,8}(?:接|带|领|找|抓|收)"
+)
+
 
 @dataclass(frozen=True)
 class PolicyDecision:
@@ -176,6 +186,7 @@ class PolicyDecision:
     reply: str
     intent: dict[str, Any]
     reason: str
+    schedule: dict[str, Any] | list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -186,6 +197,7 @@ class PolicyDecision:
             "reply": self.reply,
             "intent": self.intent,
             "reason": self.reason,
+            "schedule": self.schedule,
         }
 
 
@@ -198,6 +210,12 @@ class BranchPolicyEngine:
         snapshot: dict[str, Any],
         branch: BranchMatch,
     ) -> PolicyDecision | None:
+        home = self._homestead(message, snapshot)
+        if home is not None:
+            return home
+        glommer = self._glommer(message, snapshot)
+        if glommer is not None:
+            return glommer
         handlers = {
             "combat": self._combat,
             "collection": self._collection,
@@ -211,6 +229,236 @@ class BranchPolicyEngine:
         }
         handler = handlers.get(branch.branch_id)
         return handler(message, snapshot) if handler is not None else None
+
+    def _homestead(
+        self,
+        message: str,
+        snapshot: dict[str, Any],
+    ) -> PolicyDecision | None:
+        if HOME_ESTABLISH.search(message):
+            return PolicyDecision(
+                branch_id="base",
+                rule_id="base.establish_home",
+                confidence=0.99,
+                reply="好，我记住这里。以后我回基地后会留下照料自己，不再跟着你乱跑。",
+                intent=self._intent(
+                    "homestead",
+                    reason="establish_persistent_home",
+                    lease_seconds=24 * 60 * 60,
+                    params={
+                        "establish_home": True,
+                        "name": "家",
+                        "stay_home": True,
+                        "stop_distance": 4,
+                    },
+                ),
+                reason="persistent_home_established",
+            )
+        if HOME_CHORE_REQUEST.search(message):
+            home = snapshot.get("home")
+            home = home if isinstance(home, dict) else {}
+            landmarks = snapshot.get("landmarks")
+            landmarks = landmarks if isinstance(landmarks, dict) else {}
+            name = next(
+                (
+                    str(home.get(key))
+                    for key in ("name", "landmark")
+                    if home.get(key)
+                ),
+                None,
+            )
+            if name is None:
+                name = next(
+                    (
+                        candidate
+                        for candidate in HOME_NAMES
+                        if candidate in landmarks
+                    ),
+                    None,
+                )
+            if name is not None:
+                companion = snapshot.get("companion") or {}
+                dx = float(companion.get("x") or 0) - float(
+                    home.get("x") or 0
+                )
+                dz = float(companion.get("z") or 0) - float(
+                    home.get("z") or 0
+                )
+                same_shard = (
+                    home.get("shard") is None
+                    or home.get("shard")
+                    == (snapshot.get("world") or {}).get("shard")
+                )
+                at_home = bool(
+                    same_shard
+                    and home.get("x") is not None
+                    and home.get("z") is not None
+                    and dx * dx + dz * dz <= 16 * 16
+                )
+                return PolicyDecision(
+                    branch_id="base",
+                    rule_id="base.run_home_chores",
+                    confidence=0.96,
+                    reply=(
+                        "好，我先把家里散落的物资、成熟资源和快坏食物检查一遍。"
+                        if at_home
+                        else f"好，我先回“{name}”，到家后从散落物资和成熟资源开始收拾。"
+                    ),
+                    intent=self._intent(
+                        "homestead",
+                        reason="run_autonomous_home_chores",
+                        lease_seconds=24 * 60 * 60,
+                        params={
+                            "landmark": name,
+                            "stay_home": True,
+                            "stop_distance": 4,
+                        },
+                    ),
+                    reason="home_chores_requested",
+                )
+        if not HOME_RETURN.search(message):
+            return None
+        landmarks = snapshot.get("landmarks")
+        if not isinstance(landmarks, dict):
+            return None
+        name = next(
+            (
+                candidate
+                for candidate in HOME_NAMES
+                if candidate in landmarks
+            ),
+            None,
+        )
+        if name is None:
+            return None
+        return PolicyDecision(
+            branch_id="base",
+            rule_id="base.return_home_and_stay",
+            confidence=0.98,
+            reply=f"好，我回“{name}”待命，路上会先照顾好自己的状态。",
+            intent=self._intent(
+                "homestead",
+                reason="persistent_return_home",
+                lease_seconds=24 * 60 * 60,
+                params={
+                    "landmark": name,
+                    "stay_home": True,
+                    "stop_distance": 4,
+                },
+            ),
+            reason="return_to_persistent_home",
+        )
+
+    def _glommer(
+        self,
+        message: str,
+        snapshot: dict[str, Any],
+    ) -> PolicyDecision | None:
+        if GLOM_MER_REQUEST.search(message) is None:
+            return None
+
+        calendar = (snapshot.get("decision_support") or {}).get(
+            "calendar"
+        ) or {}
+        glommer = calendar.get("glommer") or {}
+        known_points = [
+            point
+            for point in glommer.get("known_points") or []
+            if isinstance(point, dict)
+            and isinstance(point.get("x"), (int, float))
+            and isinstance(point.get("z"), (int, float))
+        ]
+        statue = next(
+            (
+                entity
+                for entity in snapshot.get("nearby") or []
+                if isinstance(entity, dict)
+                and str(entity.get("prefab") or "")
+                == "statueglommer"
+                and isinstance(entity.get("x"), (int, float))
+                and isinstance(entity.get("z"), (int, float))
+            ),
+            None,
+        )
+        point = statue or (known_points[0] if known_points else None)
+        world = snapshot.get("world") or {}
+        home = snapshot.get("home")
+        home = home if isinstance(home, dict) else {}
+        return_landmark = next(
+            (
+                str(home.get(key))
+                for key in ("name", "landmark")
+                if home.get(key)
+            ),
+            "家",
+        )
+        schedule = {
+            "kind": "glommer_pickup",
+            "goal": "满月时在格罗姆雕像旁接格罗姆并带回基地",
+            "due_phase": "night",
+            "due_moon_phase": "full",
+            "shard": world.get("shard") or home.get("shard"),
+            "x": point.get("x") if point is not None else None,
+            "z": point.get("z") if point is not None else None,
+            "details": {
+                "location": "格罗姆雕像",
+                "statue_known": point is not None,
+                "requires_flower": True,
+                "return_landmark": return_landmark,
+                "avoid_early_arrival": True,
+            },
+        }
+
+        if point is not None:
+            reply = (
+                "我记住了，到下一个满月的夜里会先去雕像旁，"
+                "把格罗姆接回基地。"
+            )
+            rule_id = "exploration.glommer_scheduled"
+            confidence = 0.97
+        else:
+            reply = (
+                "我先把接格罗姆记成满月待办；但现在还没掌握雕像坐标，"
+                "我会在出发前先找到它，不会假装知道位置。"
+            )
+            rule_id = "exploration.glommer_schedule_needs_location"
+            confidence = 0.93
+
+        mode = "follow"
+        params: dict[str, Any] = {}
+        home_name = next(
+            (
+                str(home.get(key))
+                for key in ("name", "landmark")
+                if home.get(key)
+            ),
+            None,
+        )
+        if home_name is not None:
+            mode = "homestead"
+            params = {
+                "landmark": home_name,
+                "stay_home": True,
+                "stop_distance": 4,
+            }
+        return PolicyDecision(
+            branch_id="exploration",
+            rule_id=rule_id,
+            confidence=confidence,
+            reply=reply,
+            intent=self._intent(
+                mode,
+                reason="glommer_pickup_scheduled",
+                lease_seconds=24 * 60 * 60,
+                params=params,
+            ),
+            reason=(
+                "glommer_scheduled_with_known_statue"
+                if point is not None
+                else "glommer_scheduled_pending_location"
+            ),
+            schedule=schedule,
+        )
 
     def preflight_playbook(
         self,
@@ -254,11 +502,28 @@ class BranchPolicyEngine:
 
     @staticmethod
     def _inventory_counts(snapshot: dict[str, Any]) -> dict[str, int]:
-        return {
+        counts = {
             str(key): int(value)
             for key, value in (snapshot.get("inventory_counts") or {}).items()
             if isinstance(value, int)
         }
+        if counts:
+            return counts
+        for item in snapshot.get("inventory") or []:
+            if not isinstance(item, dict) or not item.get("prefab"):
+                continue
+            prefab = str(item["prefab"])
+            counts[prefab] = counts.get(prefab, 0) + int(
+                item.get("stacksize") or 1
+            )
+        for item in snapshot.get("equipped") or []:
+            if not isinstance(item, dict) or not item.get("prefab"):
+                continue
+            prefab = str(item["prefab"])
+            counts[prefab] = counts.get(prefab, 0) + int(
+                item.get("stacksize") or 1
+            )
+        return counts
 
     @staticmethod
     def _equipped_prefabs(snapshot: dict[str, Any]) -> set[str]:
@@ -287,13 +552,37 @@ class BranchPolicyEngine:
 
     @classmethod
     def _best_armor_absorb(cls, snapshot: dict[str, Any]) -> float:
-        available = set(cls._inventory_counts(snapshot)) | cls._equipped_prefabs(
-            snapshot
+        best_by_slot: dict[str, float] = {}
+        items = [
+            item
+            for item in snapshot.get("inventory") or []
+            if isinstance(item, dict) and item.get("prefab")
+        ]
+        items.extend(
+            item
+            for item in snapshot.get("equipped") or []
+            if isinstance(item, dict) and item.get("prefab")
         )
-        return max(
-            (ARMOR_ABSORB.get(prefab, 0.0) for prefab in available),
-            default=0.0,
-        )
+        for item in items:
+            prefab = str(item.get("prefab") or "")
+            profile = ARMOR_PROFILE.get(prefab)
+            if profile is None:
+                continue
+            default_slot, absorb = profile
+            slot = str(item.get("slot") or default_slot)
+            condition = item.get("condition_percent")
+            if isinstance(condition, (int, float)):
+                condition = float(condition)
+                if condition > 1:
+                    condition /= 100.0
+            else:
+                condition = 1.0
+            score = absorb * max(0.0, min(1.0, condition))
+            best_by_slot[slot] = max(best_by_slot.get(slot, 0.0), score)
+        remaining = 1.0
+        for absorb in best_by_slot.values():
+            remaining *= 1.0 - absorb
+        return 1.0 - remaining
 
     @staticmethod
     def _intent(
@@ -333,6 +622,19 @@ class BranchPolicyEngine:
         message: str,
         snapshot: dict[str, Any],
     ) -> PolicyDecision | None:
+        if RETREAT_COMMAND.search(message):
+            return PolicyDecision(
+                branch_id="combat",
+                rule_id="combat.explicit_retreat",
+                confidence=0.99,
+                reply="收到，我立刻停止战斗并撤回你身边。",
+                intent=self._intent(
+                    "retreat",
+                    reason="explicit_stop_combat",
+                    lease_seconds=120,
+                ),
+                reason="explicit_retreat",
+            )
         wanted = self._matching_prefabs(message, TARGET_ALIASES)
         if not wanted:
             return None
@@ -502,6 +804,8 @@ class BranchPolicyEngine:
                 str(recipe.get("name") or ""),
                 str(recipe.get("product") or ""),
             }:
+                continue
+            if recipe.get("known") is False:
                 continue
             known = True
             available = available or bool(recipe.get("available"))
@@ -804,7 +1108,7 @@ class BranchPolicyEngine:
         message: str,
         snapshot: dict[str, Any],
     ) -> PolicyDecision | None:
-        if re.search(r"撤退|快跑|别追|回来", message):
+        if RETREAT_COMMAND.search(message):
             return PolicyDecision(
                 branch_id="movement",
                 rule_id="movement.retreat",
@@ -830,14 +1134,13 @@ class BranchPolicyEngine:
                 ),
                 reason="explicit_hold",
             )
-        if re.search(r"回家|回基地|回仓库", message):
+        if HOME_RETURN.search(message):
             landmarks = snapshot.get("landmarks")
             if isinstance(landmarks, dict):
-                candidates = ("家", "基地", "仓库")
                 name = next(
                     (
                         candidate
-                        for candidate in candidates
+                        for candidate in HOME_NAMES
                         if candidate in landmarks
                     ),
                     None,
@@ -847,13 +1150,17 @@ class BranchPolicyEngine:
                         branch_id="movement",
                         rule_id="movement.known_home",
                         confidence=0.94,
-                        reply=f"我记得“{name}”的位置，现在就回去。",
+                        reply=f"好，我回“{name}”待命。",
                         intent=self._intent(
-                            "move_to_landmark",
-                            reason="local_return_known_home",
-                            lease_seconds=1800,
-                            params={"landmark": name},
+                            "homestead",
+                            reason="persistent_return_home",
+                            lease_seconds=24 * 60 * 60,
+                            params={
+                                "landmark": name,
+                                "stay_home": True,
+                                "stop_distance": 4,
+                            },
                         ),
-                        reason="known_home_landmark",
+                        reason="return_to_persistent_home",
                     )
         return None

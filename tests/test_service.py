@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from controller.config import Settings
-from controller.service import CompanionService, IMPORTANT_EVENTS
+from controller.service import CompanionService, IMPORTANT_EVENTS, death_report
 
 
 class FakePlanner:
@@ -164,6 +164,8 @@ class CompanionServiceTests(unittest.TestCase):
                 while time.time() < deadline and not service.state()["messages"]:
                     time.sleep(0.02)
                 state = service.state()
+                self.assertIn("decision_support", state)
+                self.assertIn("combat", state["decision_support"])
                 self.assertEqual(state["intent"]["mode"], "follow")
                 self.assertEqual(
                     state["messages"][-1]["text"],
@@ -312,6 +314,15 @@ class CompanionServiceTests(unittest.TestCase):
             )
             service = CompanionService(settings)
             try:
+                service.force_command(
+                    {
+                        "intent_id": "fetch-1",
+                        "mode": "fetch_item",
+                        "target_prefab": "goldnugget",
+                        "lease_seconds": 60,
+                        "params": {"amount": 1},
+                    }
+                )
                 service.tick(
                     {
                         "companion": {"x": 20, "z": -30},
@@ -324,7 +335,12 @@ class CompanionServiceTests(unittest.TestCase):
                                 "event_id": "complete-1",
                                 "type": "task_complete",
                                 "intent_id": "fetch-1",
+                                "mode": "fetch_item",
                                 "item_prefab": "goldnugget",
+                                "amount": 1,
+                                "requested_amount": 1,
+                                "inventory_before": 0,
+                                "inventory_after": 1,
                                 "verified": True,
                             }
                         ],
@@ -1026,6 +1042,7 @@ class CompanionServiceTests(unittest.TestCase):
                     "mode": "collect_loot",
                     "target_prefab": "silk",
                     "lease_seconds": 1800,
+                    "params": {"amount": 10},
                 }
             )
             try:
@@ -1039,20 +1056,100 @@ class CompanionServiceTests(unittest.TestCase):
                             {
                                 "event_id": "collect-done",
                                 "type": "task_complete",
+                                "intent_id": "collect-task",
                                 "mode": "collect_loot",
                                 "item_prefab": "silk",
                                 "amount": 10,
+                                "requested_amount": 10,
+                                "inventory_before": 0,
+                                "inventory_after": 0,
+                                "companion_delta": 10,
+                                "player_before": 0,
+                                "player_after": 10,
+                                "player_delta": 10,
                                 "delivered_to_player": True,
+                                "delivered_verified": True,
+                                "verified": True,
                             }
                         ],
                     }
                 )
                 state = service.state()
                 self.assertEqual(state["intent"]["mode"], "follow")
-                self.assertEqual(state["intent"]["reason"], "collect_complete_follow")
+                self.assertEqual(state["intent"]["reason"], "experience_complete_follow")
                 self.assertEqual(
                     state["messages"][-1]["text"],
                     "蜘蛛丝收集好了，共 10 个。已经交给你。",
+                )
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_unverified_collect_completion_keeps_original_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            service.force_command(
+                {
+                    "intent_id": "collect-five",
+                    "mode": "collect_loot",
+                    "target_prefab": "silk",
+                    "lease_seconds": 1800,
+                    "params": {"amount": 5},
+                }
+            )
+            try:
+                service.tick(
+                    {
+                        "companion": {"prefab": "waxwell"},
+                        "player": {"guid": "1", "prefab": "waxwell"},
+                        "world": {"shard": "1", "is_master": True},
+                        "nearby": [],
+                        "events": [
+                            {
+                                "event_id": "collect-two-only",
+                                "type": "task_complete",
+                                "intent_id": "collect-five",
+                                "mode": "collect_loot",
+                                "item_prefab": "silk",
+                                "amount": 2,
+                                "requested_amount": 5,
+                                "inventory_before": 0,
+                                "inventory_after": 2,
+                                "companion_delta": 2,
+                                "delivered_to_player": False,
+                                "verified": True,
+                            }
+                        ],
+                    }
+                )
+                state = service.state()
+                self.assertEqual(state["intent"]["intent_id"], "collect-five")
+                self.assertEqual(state["intent"]["mode"], "collect_loot")
+                self.assertEqual(state["messages"], [])
+                self.assertEqual(
+                    state["experience"]["last_outcome"]["reason"],
+                    "amount_below_requested",
                 )
             finally:
                 service.stop()
@@ -1220,12 +1317,34 @@ class CompanionServiceTests(unittest.TestCase):
                         ],
                     }
                 )
+                messages = service.state()["messages"]
                 hound_lines = [
                     item["text"]
-                    for item in service.state()["messages"][-4:]
+                    for item in messages
+                    if item["source"] == "emergency"
+                    and "来狗啦来狗啦" in item["text"]
                 ]
-                self.assertEqual(len(set(hound_lines)), 4)
+                self.assertEqual(len(hound_lines), 1)
                 self.assertIn("来狗啦来狗啦", hound_lines[0])
+                worm_detected = service._emergency_announcement(
+                    {
+                        "category": "hound_wave",
+                        "action": "fight",
+                        "source_prefab": "worm",
+                    },
+                    "detected",
+                )
+                self.assertIn("地底", worm_detected)
+                self.assertNotIn("狗牙", worm_detected)
+                worm_resolved = service._emergency_announcement(
+                    {
+                        "category": "hound_wave",
+                        "action": "fight",
+                        "source_prefab": "worm",
+                    },
+                    "resolved",
+                )
+                self.assertIn("蠕虫", worm_resolved)
             finally:
                 service.stop()
                 service.memory.close()
@@ -1336,6 +1455,14 @@ class CompanionServiceTests(unittest.TestCase):
             )
             service = CompanionService(settings)
             try:
+                service.force_command(
+                    {
+                        "intent_id": "recovery-base",
+                        "mode": "follow",
+                        "lease_seconds": 1800,
+                        "reason": "test_recovery_base",
+                    }
+                )
                 service.tick(
                     {
                         "companion": {"prefab": "waxwell"},
@@ -1346,48 +1473,866 @@ class CompanionServiceTests(unittest.TestCase):
                             {
                                 "event_id": "recovery-start-1",
                                 "type": "recovery_started",
+                                "intent_id": "recovery-base",
                                 "method": "tent",
+                                "health": 40,
+                                "health_max": 100,
+                                "hunger": 100,
+                                "hunger_max": 150,
+                                "sanity": 30,
+                                "sanity_max": 100,
                                 "sleep_seconds": 190,
                                 "estimated_hunger_cost": 58,
                                 "expected_health_gain": 120,
                                 "expected_sanity_gain": 60,
                             },
                             {
+                                "event_id": "recovery-complete-tent",
+                                "type": "recovery_completed",
+                                "intent_id": "recovery-base",
+                                "method": "tent",
+                                "health": 80,
+                                "health_max": 100,
+                                "hunger": 70,
+                                "hunger_max": 150,
+                                "sanity": 60,
+                                "sanity_max": 100,
+                                "verified": True,
+                            },
+                            {
+                                "event_id": "recovery-food-start-1",
+                                "type": "recovery_started",
+                                "intent_id": "recovery-base",
+                                "method": "food",
+                                "health": 80,
+                                "health_max": 100,
+                                "hunger": 40,
+                                "hunger_max": 150,
+                                "sanity": 60,
+                                "sanity_max": 100,
+                            },
+                            {
+                                "event_id": "recovery-food-complete-1",
+                                "type": "recovery_completed",
+                                "intent_id": "recovery-base",
+                                "method": "food",
+                                "health": 80,
+                                "health_max": 100,
+                                "hunger": 90,
+                                "hunger_max": 150,
+                                "sanity": 60,
+                                "sanity_max": 100,
+                                "verified": True,
+                            },
+                            {
                                 "event_id": "recovery-unavailable-1",
                                 "type": "recovery_unavailable",
+                                "intent_id": "recovery-base",
                                 "reason": "not_enough_hunger_for_sleep",
                                 "hunger_cost": 92,
                                 "hunger_after": 8,
                                 "hunger_reserve": 18,
                             },
                             {
-                                "event_id": "recovery-food-1",
-                                "type": "recovery_started",
-                                "method": "food",
-                                "hunger_percent": 40,
-                            },
-                            {
-                                "event_id": "recovery-heal-1",
-                                "type": "recovery_completed",
-                                "method": "healing_item",
-                                "health": 80,
+                                "event_id": "recovery-unavailable-duplicate",
+                                "type": "recovery_unavailable",
+                                "intent_id": "recovery-base",
+                                "reason": "not_enough_hunger_for_sleep",
+                                "hunger_cost": 92,
+                                "hunger_after": 8,
+                                "hunger_reserve": 18,
                             },
                         ],
                     }
                 )
-                messages = service.state()["messages"]
-                self.assertEqual(len(messages), 4)
+                state = service.state()
+                messages = state["messages"]
+                self.assertEqual(len(messages), 5)
                 self.assertIn("大约睡 190 秒", messages[0]["text"])
                 self.assertIn("预计消耗 58 点饥饿", messages[0]["text"])
                 self.assertIn("恢复 120 点生命", messages[0]["text"])
-                self.assertIn("只剩 8 点", messages[1]["text"])
-                self.assertIn("至少要保留 18 点", messages[1]["text"])
+                self.assertIn("我休息好了", messages[1]["text"])
                 self.assertIn("先吃些随身食物", messages[2]["text"])
-                self.assertIn("治疗物品用完了", messages[3]["text"])
-                self.assertIn("生命 80", messages[3]["text"])
+                self.assertIn("饥饿 90", messages[3]["text"])
+                self.assertIn("只剩 8 点", messages[4]["text"])
+                self.assertIn("至少要保留 18 点", messages[4]["text"])
+                self.assertEqual(state["intent"]["intent_id"], "recovery-base")
             finally:
                 service.stop()
                 service.memory.close()
+
+    def test_boss_fight_queues_wheel_work_until_combat_ends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.force_command(
+                    {
+                        "intent_id": "boss-fight",
+                        "mode": "combat",
+                        "target_guid": "boss-1",
+                        "lease_seconds": 1800,
+                    }
+                )
+                queued_state = service.wheel_command(
+                    {
+                        "schema": 1,
+                        "branch_id": "collection",
+                        "action": "collect_resource",
+                        "target_id": "grass",
+                        "amount": 10,
+                    }
+                )
+
+                self.assertTrue(queued_state["command_queued"])
+                self.assertEqual(
+                    queued_state["intent"]["intent_id"],
+                    "boss-fight",
+                )
+                self.assertEqual(
+                    queued_state["pending_intents"][0]["mode"],
+                    "harvest_area",
+                )
+                self.assertIn(
+                    "结束后马上照你说的做",
+                    queued_state["messages"][-1]["text"],
+                )
+                self.assertNotIn(
+                    "优先级",
+                    queued_state["messages"][-1]["text"],
+                )
+                self.assertNotIn(
+                    "harvest_area",
+                    queued_state["messages"][-1]["text"],
+                )
+
+                service.tick(
+                    {
+                        "companion": {"x": 0, "z": 0, "health": 100},
+                        "player": {"guid": "1"},
+                        "world": {"shard": "1", "is_master": True},
+                        "events": [
+                            {
+                                "event_id": "boss-defeated",
+                                "type": "combat_target_defeated",
+                                "intent_id": "boss-fight",
+                                "target_guid": "boss-1",
+                                "target_prefab": "dragonfly",
+                                "verified": True,
+                            }
+                        ],
+                    }
+                )
+                resumed = service.state()
+                self.assertEqual(resumed["intent"]["mode"], "harvest_area")
+                self.assertEqual(resumed["intent"]["params"]["amount"], 10)
+                self.assertEqual(resumed["pending_intents"], [])
+                self.assertIn(
+                    "继续刚才记下的",
+                    resumed["messages"][-1]["text"],
+                )
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_user_retreat_interrupts_boss_fight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.force_command(
+                    {
+                        "intent_id": "boss-fight",
+                        "mode": "combat",
+                        "target_guid": "boss-1",
+                        "lease_seconds": 1800,
+                    }
+                )
+                state = service.wheel_command(
+                    {
+                        "schema": 1,
+                        "branch_id": "combat",
+                        "action": "retreat",
+                    }
+                )
+
+                self.assertFalse(state["command_queued"])
+                self.assertEqual(state["intent"]["mode"], "retreat")
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_model_task_during_boss_fight_is_queued(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.force_command(
+                    {
+                        "intent_id": "boss-fight",
+                        "mode": "combat",
+                        "target_guid": "boss-1",
+                        "lease_seconds": 1800,
+                    }
+                )
+                service._apply_response(
+                    {
+                        "reply": {
+                            "text": "好，我去收草。",
+                            "expects_response": False,
+                        },
+                        "intent": {
+                            "intent_id": "chat-grass",
+                            "mode": "harvest_area",
+                            "lease_seconds": 600,
+                            "params": {"amount": 10},
+                        },
+                    },
+                    force_chat_only=False,
+                    instruction="帮我收 10 个草",
+                )
+
+                state = service.state()
+                self.assertEqual(state["intent"]["intent_id"], "boss-fight")
+                self.assertEqual(
+                    state["pending_intents"][0]["intent_id"],
+                    "chat-grass",
+                )
+                self.assertIn(
+                    "结束后马上照你说的做",
+                    state["messages"][-1]["text"],
+                )
+                self.assertNotIn("优先级", state["messages"][-1]["text"])
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_death_report_names_cause_and_vitals(self) -> None:
+        self.assertNotIn("companion_dead", IMPORTANT_EVENTS)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.force_command(
+                    {
+                        "intent_id": "follow-task",
+                        "mode": "follow",
+                        "lease_seconds": 600,
+                    }
+                )
+                service.tick(
+                    {
+                        "companion": {
+                            "x": 3,
+                            "z": 4,
+                            "health": 0,
+                            "max_health": 150,
+                            "hunger": 41,
+                            "max_hunger": 150,
+                            "sanity": 60,
+                            "max_sanity": 200,
+                        },
+                        "player": {"guid": "1"},
+                        "world": {"shard": "1", "is_master": True},
+                        "events": [
+                            {
+                                "event_id": "death-cold",
+                                "type": "companion_dead",
+                                "cause": "cold",
+                                "health": 0,
+                                "health_max": 150,
+                                "hunger": 41,
+                                "hunger_max": 150,
+                                "sanity": 60,
+                                "sanity_max": 200,
+                                "freezing": True,
+                                "active_mode": "follow",
+                            }
+                        ],
+                    }
+                )
+                state = service.state()
+                text = state["messages"][-1]["text"]
+                self.assertIn("直接死因：冻死", text)
+                self.assertIn("饥饿 41/150", text)
+                self.assertIn("当时处于过冷", text)
+                self.assertIn("当时任务：跟随你", text)
+                self.assertNotIn("状态不好", text)
+                self.assertEqual(state["intent"]["reason"], "death_respawn_follow")
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_death_while_resident_returns_to_home_and_stays(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.force_command(
+                    {
+                        "intent_id": "resident",
+                        "mode": "homestead",
+                        "lease_seconds": 86400,
+                        "params": {
+                            "landmark": "家",
+                            "stay_home": True,
+                            "stop_distance": 4,
+                        },
+                    }
+                )
+                service.tick(
+                    {
+                        "companion": {"x": 3, "z": 4, "health": 0},
+                        "player": {"guid": "1"},
+                        "world": {"shard": "1", "is_master": True},
+                        "events": [
+                            {
+                                "event_id": "death-at-home",
+                                "type": "companion_dead",
+                                "cause": "cold",
+                                "active_mode": "homestead",
+                                "home": {
+                                    "name": "家",
+                                    "shard": "1",
+                                    "x": 100,
+                                    "z": -20,
+                                },
+                            }
+                        ],
+                    }
+                )
+
+                state = service.state()
+                self.assertEqual(
+                    state["intent"]["reason"],
+                    "death_respawn_homestead",
+                )
+                self.assertEqual(state["intent"]["mode"], "homestead")
+                self.assertEqual(
+                    state["intent"]["params"]["landmark"],
+                    "家",
+                )
+                self.assertEqual(state["intent"]["position"], [100.0, -20.0])
+                self.assertIn("回到“家”继续驻守", state["messages"][-1]["text"])
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_low_health_does_not_turn_resident_mode_into_follow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.force_command(
+                    {
+                        "intent_id": "resident",
+                        "mode": "homestead",
+                        "lease_seconds": 86400,
+                        "params": {"landmark": "家", "stay_home": True},
+                    }
+                )
+                service.tick(
+                    {
+                        "companion": {
+                            "x": 100,
+                            "z": -20,
+                            "health": 8,
+                            "max_health": 150,
+                        },
+                        "player": {"guid": "1"},
+                        "world": {"shard": "1", "is_master": True},
+                        "events": [
+                            {
+                                "event_id": "home-low-health",
+                                "type": "task_failed",
+                                "intent_id": "resident",
+                                "mode": "homestead",
+                                "reason": "survival_health_low",
+                            }
+                        ],
+                    }
+                )
+
+                state = service.state()
+                self.assertEqual(state["intent"]["mode"], "homestead")
+                self.assertEqual(state["intent"]["intent_id"], "resident")
+                self.assertIn("就在基地处理状态", state["messages"][-1]["text"])
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_death_report_infers_darkness_when_native_cause_is_missing(
+        self,
+    ) -> None:
+        text = death_report(
+            {
+                "health": 0,
+                "health_max": 75,
+                "hunger": 74,
+                "hunger_max": 150,
+                "sanity": 185,
+                "sanity_max": 200,
+                "freezing": False,
+                "overheating": False,
+                "in_light": False,
+                "inferred_cause": "darkness",
+            }
+        )
+
+        self.assertIn("直接死因：被黑暗里的查理杀死", text)
+        self.assertNotIn("游戏事件没有提供可识别的直接死因", text)
+
+    def test_schedule_actions_persist_and_complete_glommer_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service._apply_response(
+                    {
+                        "reply": {
+                            "text": "记住了，下次满月我去接格罗姆。",
+                            "expects_response": False,
+                        },
+                        "schedule": {
+                            "kind": "glommer_pickup",
+                            "goal": "满月去格罗姆雕像接回格罗姆",
+                            "due_phase": "night",
+                            "due_moon_phase": "full",
+                            "shard": "1",
+                            "x": 42,
+                            "z": -18,
+                            "details": {
+                                "return_landmark": "家",
+                                "requires_flower": True,
+                            },
+                        },
+                    },
+                    force_chat_only=False,
+                )
+
+                saved = service.agent_memory.scheduled_tasks()
+                self.assertEqual(len(saved), 1)
+                task = saved[0]
+                self.assertEqual(task["kind"], "glommer_pickup")
+                self.assertEqual(task["due_moon_phase"], "full")
+                self.assertEqual(task["details"]["return_landmark"], "家")
+
+                service._apply_response(
+                    {
+                        "reply": {
+                            "text": "格罗姆接回来了。",
+                            "expects_response": False,
+                        },
+                        "schedule_updates": {
+                            "schedule_id": task["id"],
+                            "status": "completed",
+                        },
+                    },
+                    force_chat_only=False,
+                )
+                self.assertEqual(service.agent_memory.scheduled_tasks(), [])
+                self.assertEqual(
+                    len(
+                        service.agent_memory.scheduled_tasks(
+                            status="completed"
+                        )
+                    ),
+                    1,
+                )
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_local_glommer_command_persists_schedule_without_model(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            service.planner = ExplodingPlanner()
+            try:
+                service.tick(
+                    {
+                        "companion": {
+                            "guid": "99",
+                            "prefab": "waxwell",
+                        },
+                        "player": {
+                            "guid": "1",
+                            "prefab": "wilson",
+                            "x": 0,
+                            "z": 0,
+                        },
+                        "home": {
+                            "name": "家",
+                            "shard": "1",
+                            "x": 10,
+                            "z": 20,
+                        },
+                        "world": {
+                            "shard": "1",
+                            "moon_phase": "quarter",
+                        },
+                        "nearby": [
+                            {
+                                "prefab": "statueglommer",
+                                "x": 420,
+                                "z": -180,
+                            }
+                        ],
+                        "events": [],
+                    }
+                )
+
+                state = service.instruction("帮我把格罗姆接回来")
+
+                self.assertEqual(
+                    state["local_policy_matched"],
+                    "exploration.glommer_scheduled",
+                )
+                tasks = service.agent_memory.scheduled_tasks()
+                self.assertEqual(len(tasks), 1)
+                self.assertEqual(tasks[0]["kind"], "glommer_pickup")
+                self.assertEqual(tasks[0]["due_phase"], "night")
+                self.assertEqual(tasks[0]["due_moon_phase"], "full")
+                self.assertEqual(tasks[0]["x"], 420)
+                self.assertEqual(tasks[0]["z"], -180)
+                self.assertEqual(
+                    tasks[0]["details"]["return_landmark"],
+                    "家",
+                )
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_due_schedule_waits_for_full_moon_night(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                task_id = service.agent_memory.save_scheduled_task(
+                    kind="glommer_pickup",
+                    goal="满月去格罗姆雕像接回格罗姆",
+                    due_day=10,
+                    due_phase="night",
+                    due_moon_phase="full",
+                    shard="1",
+                )
+                snapshot = {
+                    "companion": {},
+                    "player": {"guid": "1"},
+                    "world": {
+                        "shard": "1",
+                        "day": 9,
+                        "phase": "night",
+                        "moon_phase": "full",
+                    },
+                    "nearby": [],
+                    "events": [],
+                }
+                service.tick(snapshot)
+                self.assertIsNone(service._pending_instruction)
+
+                snapshot["world"]["day"] = 10
+                snapshot["world"]["phase"] = "dusk"
+                service.tick(snapshot)
+                self.assertIsNone(service._pending_instruction)
+
+                snapshot["world"]["phase"] = "night"
+                service.tick(snapshot)
+                self.assertIn(
+                    "满月去格罗姆雕像接回格罗姆",
+                    service._pending_instruction or "",
+                )
+                self.assertEqual(service._pending_trigger, "schedule_due")
+                triggered = service.agent_memory.scheduled_tasks()[0]
+                self.assertEqual(triggered["id"], task_id)
+                self.assertIsNotNone(triggered["last_triggered_at"])
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_due_schedule_cannot_interrupt_boss_fight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            prompt = root / "prompt.md"
+            prompt.write_text("JSON only.", encoding="utf-8")
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                deepseek_api_key=None,
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-chat",
+                memory_vault=vault,
+                memory_index_db=root / "memory.sqlite3",
+                prompt_path=prompt,
+                decision_interval=1.0,
+                replan_interval=0.0,
+                ambient_chat_min_seconds=3600.0,
+                ambient_chat_max_seconds=7200.0,
+                request_timeout=2.0,
+                default_lease_seconds=20.0,
+            )
+            service = CompanionService(settings)
+            try:
+                service.force_command(
+                    {
+                        "intent_id": "boss-fight",
+                        "mode": "combat",
+                        "target_guid": "boss-1",
+                        "lease_seconds": 1800,
+                    }
+                )
+                service.agent_memory.save_scheduled_task(
+                    kind="glommer_pickup",
+                    goal="满月去格罗姆雕像接回格罗姆",
+                    due_phase="night",
+                    due_moon_phase="full",
+                    shard="1",
+                )
+                service.tick(
+                    {
+                        "companion": {},
+                        "player": {"guid": "1"},
+                        "world": {
+                            "shard": "1",
+                            "day": 10,
+                            "phase": "night",
+                            "moon_phase": "full",
+                        },
+                        "nearby": [],
+                        "events": [],
+                    }
+                )
+                self.assertEqual(
+                    service.state()["intent"]["intent_id"],
+                    "boss-fight",
+                )
+
+                service._apply_response(
+                    {
+                        "reply": {
+                            "text": "等这场战斗结束我就去。",
+                            "expects_response": False,
+                        },
+                        "intent": {
+                            "intent_id": "glommer-after-boss",
+                            "mode": "fetch_item",
+                            "target_prefab": "glommerflower",
+                            "lease_seconds": 1800,
+                        },
+                    },
+                    force_chat_only=False,
+                    instruction=service._pending_instruction,
+                )
+                state = service.state()
+                self.assertEqual(state["intent"]["intent_id"], "boss-fight")
+                self.assertEqual(
+                    state["pending_intents"][0]["intent_id"],
+                    "glommer-after-boss",
+                )
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_player_chat_is_compacted_and_internal_sentences_are_removed(
+        self,
+    ) -> None:
+        text = (
+            "我的优先级更高，所以先处理基地任务。"
+            "你饿了，我去给你做点吃的。"
+            "这一步完全完成以后我还会继续检查周围，再决定收什么、"
+            "补哪一块地和接下来要做什么。"
+        )
+
+        compact = CompanionService._compact_player_reply(text, "task")
+
+        self.assertNotIn("优先级", compact)
+        self.assertIn("你饿了，我去给你做点吃的。", compact)
+        self.assertLessEqual(len(compact), 96)
+        self.assertTrue(compact.endswith("。"))
 
 
 if __name__ == "__main__":

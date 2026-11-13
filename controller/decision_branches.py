@@ -26,6 +26,7 @@ MODE_BRANCH_OVERRIDES = {
     "follow": "movement",
     "hold": "movement",
     "remember_location": "movement",
+    "homestead": "base",
     "speak": "information",
     "eat": "survival",
     "operate": "base",

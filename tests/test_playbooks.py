@@ -97,6 +97,18 @@ class PlaybookMatcherTests(unittest.TestCase):
         self.assertEqual(twigs.intent["params"]["target_prefabs"], ["twigs"])
 
     def test_gather_and_boss_candidates(self) -> None:
+        chop = self.matcher.match("去砍树", self.maxwell)
+        assert chop is not None
+        self.assertTrue(chop.direct)
+        self.assertEqual(chop.playbook_id, "generic.chop_trees")
+        self.assertEqual(chop.intent["mode"], "harvest_area")
+        self.assertEqual(chop.intent["params"]["required_tool"], "axe")
+        self.assertIn("evergreen", chop.intent["params"]["target_prefabs"])
+        self.assertEqual(
+            chop.intent["params"]["assist_minion_prefab"],
+            "shadowworker",
+        )
+
         gather = self.matcher.match("帮我收一下草和树枝", self.maxwell)
         assert gather is not None
         self.assertEqual(gather.intent["mode"], "harvest_area")

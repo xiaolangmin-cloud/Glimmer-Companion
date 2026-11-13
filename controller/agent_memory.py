@@ -80,6 +80,36 @@ class AgentMemoryStore:
             )
             self._sqlite.execute(
                 """
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    goal TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    due_day INTEGER,
+                    due_phase TEXT,
+                    due_moon_phase TEXT,
+                    shard TEXT,
+                    x REAL,
+                    z REAL,
+                    details_json TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    last_triggered_at REAL
+                )
+                """
+            )
+            self._sqlite.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_summaries (
+                    room TEXT PRIMARY KEY,
+                    summary TEXT NOT NULL,
+                    summarized_through_id INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            self._sqlite.execute(
+                """
                 CREATE TABLE IF NOT EXISTS world_notes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     shard TEXT NOT NULL,
@@ -144,6 +174,12 @@ class AgentMemoryStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_implementation_topic
                 ON implementation_notes(topic, updated_at)
+                """
+            )
+            self._sqlite.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_scheduled_status
+                ON scheduled_tasks(status, updated_at)
                 """
             )
 
@@ -428,6 +464,7 @@ class AgentMemoryStore:
                 """,
                 (room, role, text, time.time()),
             )
+        self._compact_chat_if_needed(room)
 
     def recent_chat(self, room: str = "chat", limit: int = 12) -> list[dict[str, Any]]:
         with self._lock:
@@ -449,6 +486,188 @@ class AgentMemoryStore:
             }
             for row in reversed(rows)
         ]
+
+    @staticmethod
+    def _compact_chat_text(text: str, max_chars: int = 220) -> str:
+        compact = re.sub(r"\s+", " ", text).strip()
+        if len(compact) <= max_chars:
+            return compact
+        return compact[: max_chars - 1].rstrip() + "…"
+
+    @staticmethod
+    def _clip_chat_summary(summary: str, max_chars: int) -> str:
+        if len(summary) <= max_chars:
+            return summary
+        prefix = "[更早摘要已折叠]\n"
+        if max_chars <= len(prefix):
+            return prefix[:max_chars]
+        return prefix + summary[-(max_chars - len(prefix)) :].lstrip()
+
+    def _compact_chat_if_needed(
+        self,
+        room: str,
+        *,
+        keep_recent: int = 10,
+        trigger_messages: int = 12,
+        max_unsummarized_chars: int = 6000,
+        max_summary_chars: int = 2500,
+    ) -> bool:
+        """Fold older completed chat into a bounded result summary.
+
+        Raw messages remain in chat_messages. Only the model-visible summary is
+        compacted, so exact chat history can still be inspected or recovered.
+        """
+        with self._lock:
+            summary_row = self._sqlite.execute(
+                """
+                SELECT summary, summarized_through_id
+                FROM chat_summaries
+                WHERE room = ?
+                """,
+                (room,),
+            ).fetchone()
+            summarized_through_id = (
+                int(summary_row["summarized_through_id"]) if summary_row else 0
+            )
+            rows = self._sqlite.execute(
+                """
+                SELECT id, role, text
+                FROM chat_messages
+                WHERE room = ? AND id > ?
+                ORDER BY id ASC
+                """,
+                (room, summarized_through_id),
+            ).fetchall()
+
+        if len(rows) <= keep_recent:
+            return False
+        candidates = rows[:-keep_recent]
+        candidate_chars = sum(len(str(row["text"])) for row in candidates)
+        if (
+            len(candidates) < trigger_messages
+            and candidate_chars < max_unsummarized_chars
+        ):
+            return False
+
+        compact_lines = ["[较早已完成对话摘要]"]
+        for row in candidates:
+            role = "用户" if row["role"] == "user" else "微光"
+            compact_lines.append(
+                f"- {role}: {self._compact_chat_text(str(row['text']))}"
+            )
+        new_summary = "\n".join(compact_lines)
+        existing = str(summary_row["summary"]) if summary_row else ""
+        combined = "\n".join(
+            part for part in (existing.strip(), new_summary) if part
+        )
+        combined = self._clip_chat_summary(combined, max_summary_chars)
+
+        with self._lock, self._sqlite:
+            self._sqlite.execute(
+                """
+                INSERT INTO chat_summaries(
+                    room, summary, summarized_through_id, updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(room) DO UPDATE SET
+                    summary = excluded.summary,
+                    summarized_through_id = excluded.summarized_through_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    room,
+                    combined,
+                    int(candidates[-1]["id"]),
+                    time.time(),
+                ),
+            )
+        return True
+
+    def chat_context(
+        self,
+        room: str = "chat",
+        *,
+        recent_limit: int = 10,
+        max_recent_chars: int = 6000,
+        max_summary_chars: int = 2500,
+    ) -> dict[str, Any]:
+        """Return the bounded model-visible chat context.
+
+        The complete transcript stays in chat_messages. This method is the only
+        chat view intended for model prompts: an older-result summary plus the
+        newest messages under a hard character budget.
+        """
+        self._compact_chat_if_needed(
+            room,
+            keep_recent=recent_limit,
+            trigger_messages=1,
+            max_unsummarized_chars=0,
+            max_summary_chars=max_summary_chars,
+        )
+        with self._lock:
+            summary_row = self._sqlite.execute(
+                """
+                SELECT summary, summarized_through_id
+                FROM chat_summaries
+                WHERE room = ?
+                """,
+                (room,),
+            ).fetchone()
+            rows = self._sqlite.execute(
+                """
+                SELECT id, role, text, created_at
+                FROM chat_messages
+                WHERE room = ? AND id > ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (
+                    room,
+                    int(summary_row["summarized_through_id"]) if summary_row else 0,
+                    recent_limit,
+                ),
+            ).fetchall()
+            raw_count = int(
+                self._sqlite.execute(
+                    "SELECT COUNT(*) FROM chat_messages WHERE room = ?",
+                    (room,),
+                ).fetchone()[0]
+            )
+
+        selected: list[dict[str, Any]] = []
+        used = 0
+        for row in rows:
+            text = str(row["text"])
+            remaining = max_recent_chars - used
+            if remaining <= 0:
+                break
+            if len(text) > remaining:
+                if remaining < 24:
+                    break
+                text = "[前文截断] " + text[-(remaining - len("[前文截断] ")) :]
+            selected.append(
+                {
+                    "role": row["role"],
+                    "text": text,
+                    "created_at": row["created_at"],
+                }
+            )
+            used += len(text)
+        selected.reverse()
+
+        summary = self._clip_chat_summary(
+            str(summary_row["summary"]) if summary_row else "",
+            max_summary_chars,
+        )
+
+        return {
+            "summary": summary,
+            "summarized_through_id": (
+                int(summary_row["summarized_through_id"]) if summary_row else 0
+            ),
+            "recent": selected,
+            "raw_count": raw_count,
+        }
 
     def remember_world_point(
         self,
@@ -586,6 +805,190 @@ class AgentMemoryStore:
                 WHERE status = 'active' AND goal = ?
                 """,
                 (status, time.time(), goal),
+            )
+
+    def save_scheduled_task(
+        self,
+        *,
+        kind: str,
+        goal: str,
+        due_day: int | None = None,
+        due_phase: str | None = None,
+        due_moon_phase: str | None = None,
+        shard: str | None = None,
+        x: float | None = None,
+        z: float | None = None,
+        details: dict[str, Any] | None = None,
+        status: str = "active",
+    ) -> int:
+        kind = kind.strip()
+        goal = goal.strip()
+        if not kind or not goal:
+            raise ValueError("schedule kind and goal must not be empty")
+        now = time.time()
+        with self._lock, self._sqlite:
+            current = self._sqlite.execute(
+                """
+                SELECT id
+                FROM scheduled_tasks
+                WHERE status = 'active' AND kind = ? AND goal = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (kind, goal),
+            ).fetchone()
+            values = (
+                due_day,
+                due_phase,
+                due_moon_phase,
+                shard,
+                x,
+                z,
+                json.dumps(
+                    details or {},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                status,
+                now,
+            )
+            if current is not None:
+                self._sqlite.execute(
+                    """
+                    UPDATE scheduled_tasks
+                    SET due_day = ?,
+                        due_phase = ?,
+                        due_moon_phase = ?,
+                        shard = ?,
+                        x = ?,
+                        z = ?,
+                        details_json = ?,
+                        status = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    values + (int(current["id"]),),
+                )
+                return int(current["id"])
+            cursor = self._sqlite.execute(
+                """
+                INSERT INTO scheduled_tasks(
+                    due_day, due_phase, due_moon_phase, shard, x, z,
+                    details_json, status, updated_at, kind, goal, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values + (kind, goal, now),
+            )
+            return int(cursor.lastrowid)
+
+    def scheduled_tasks(
+        self,
+        *,
+        status: str = "active",
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._sqlite.execute(
+                """
+                SELECT id, kind, goal, status, due_day, due_phase,
+                       due_moon_phase, shard, x, z, details_json,
+                       created_at, updated_at, last_triggered_at
+                FROM scheduled_tasks
+                WHERE status = ?
+                ORDER BY COALESCE(due_day, 2147483647), id
+                LIMIT ?
+                """,
+                (status, limit),
+            ).fetchall()
+        result = []
+        for row in rows:
+            task = dict(row)
+            task["details"] = json.loads(task.pop("details_json") or "{}")
+            result.append(task)
+        return result
+
+    def due_scheduled_tasks(
+        self,
+        *,
+        day: int | None,
+        phase: str | None,
+        moon_phase: str | None,
+        shard: str | None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        result = []
+        for task in self.scheduled_tasks(limit=limit * 2):
+            if (
+                task.get("due_day") is not None
+                and (day is None or int(task["due_day"]) > int(day))
+            ):
+                continue
+            if (
+                task.get("due_phase")
+                and str(task["due_phase"]).lower()
+                != str(phase or "").lower()
+            ):
+                continue
+            if (
+                task.get("due_moon_phase")
+                and str(task["due_moon_phase"]).lower()
+                != str(moon_phase or "").lower()
+            ):
+                continue
+            if task.get("shard") and task["shard"] != shard:
+                continue
+            result.append(task)
+            if len(result) >= limit:
+                break
+        return result
+
+    def update_scheduled_task(
+        self,
+        task_id: int | None,
+        *,
+        status: str | None = None,
+        shard: str | None = None,
+        x: float | None = None,
+        z: float | None = None,
+        details: dict[str, Any] | None = None,
+        mark_triggered: bool = False,
+    ) -> None:
+        assignments = ["updated_at = ?"]
+        params: list[Any] = [time.time()]
+        if status is not None:
+            assignments.append("status = ?")
+            params.append(status)
+        if shard is not None:
+            assignments.append("shard = ?")
+            params.append(shard)
+        if x is not None:
+            assignments.append("x = ?")
+            params.append(float(x))
+        if z is not None:
+            assignments.append("z = ?")
+            params.append(float(z))
+        if details is not None:
+            assignments.append("details_json = ?")
+            params.append(
+                json.dumps(
+                    details,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        if mark_triggered:
+            assignments.append("last_triggered_at = ?")
+            params.append(time.time())
+        params.append(task_id)
+        with self._lock, self._sqlite:
+            self._sqlite.execute(
+                f"""
+                UPDATE scheduled_tasks
+                SET {", ".join(assignments)}
+                WHERE id = ?
+                """,
+                params,
             )
 
     def record_capability_gap(

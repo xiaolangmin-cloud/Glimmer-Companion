@@ -257,10 +257,7 @@ local function IsDefaultCompanionScreen()
     if GLOBAL.TheFrontEnd == nil or GLOBAL.ThePlayer == nil then
         return false
     end
-    local screen = GLOBAL.TheFrontEnd:GetActiveScreen()
-    local screen_name = screen ~= nil and screen.name or ""
-    if not screen_name:find("HUD")
-        or GLOBAL.ThePlayer.HUD == nil
+    if GLOBAL.ThePlayer.HUD == nil
         or GLOBAL.ThePlayer.HUD:IsChatInputScreenOpen()
     then
         return false
@@ -269,19 +266,7 @@ local function IsDefaultCompanionScreen()
     if hud.writeablescreen ~= nil then
         return false
     end
-    local controls = hud.controls
-    local crafting = controls ~= nil
-        and controls.craftingmenu
-        or nil
-    local search_box = crafting ~= nil
-        and crafting.craftingmenu
-        and crafting.craftingmenu.search_box
-        or nil
-    return not (
-        search_box ~= nil
-        and search_box.textbox ~= nil
-        and search_box.textbox.editing
-    )
+    return true
 end
 
 local function SubmitWheelCommand(command)
@@ -350,25 +335,137 @@ AddModRPCHandler(
     end
 )
 
+local function CloseCompanionWheel(wheel)
+    local hud = wheel.owner ~= nil
+        and wheel.owner.HUD
+        or nil
+    if hud ~= nil and hud.CloseCommandWheel ~= nil then
+        hud:CloseCommandWheel()
+    else
+        wheel:Close()
+    end
+end
+
 local function ToggleCompanionWheel()
-    if not IsDefaultCompanionScreen() or glimmer_command_wheel == nil then
+    if glimmer_command_wheel == nil then
         return
     end
-    if glimmer_controls ~= nil
-        and (
-            glimmer_controls.commandwheel ~= nil
-            and glimmer_controls.commandwheel:IsOpen()
-            or glimmer_controls.spellwheel ~= nil
-            and glimmer_controls.spellwheel:IsOpen()
+    local hud = glimmer_command_wheel.owner ~= nil
+        and glimmer_command_wheel.owner.HUD
+        or nil
+    if glimmer_command_wheel:IsOpen() then
+        if hud ~= nil then
+            hud:CloseCommandWheel()
+        else
+            glimmer_command_wheel:Close()
+        end
+        return
+    end
+    if not IsDefaultCompanionScreen()
+        or hud == nil
+        or glimmer_controls == nil
+        or glimmer_controls.spellwheel ~= nil
+        and glimmer_controls.spellwheel:IsOpen()
+    then
+        return
+    end
+    hud:OpenCommandWheel()
+end
+
+local function RegisterCompanionWheelKey()
+    if GLOBAL.TheInput == nil
+        or GLOBAL.rawget(
+            GLOBAL,
+            "_codex_companion_wheel_key_registered"
         )
     then
         return
     end
-    if glimmer_command_wheel:IsOpen() then
-        glimmer_command_wheel:Close()
-    else
-        glimmer_command_wheel:Open()
+    local wheel_key_name = GetModConfigData("wheel_key")
+        or "MOUSEBUTTON_5"
+    local wheel_keys = {
+        MOUSEBUTTON_MIDDLE = 1002,
+        MOUSEBUTTON_4 = 1005,
+        MOUSEBUTTON_5 = 1006,
+    }
+    local wheel_key = wheel_keys[wheel_key_name]
+    -- Migrate every retired keyboard option so existing installations
+    -- switch to the requested second side button without a config reset.
+    if wheel_key == nil then
+        wheel_key_name = "MOUSEBUTTON_5"
+        wheel_key = wheel_keys[wheel_key_name]
     end
+    if type(wheel_key) ~= "number" then
+        return
+    end
+    if wheel_key >= 1000 and GLOBAL.TheInput.AddMouseButtonHandler then
+        GLOBAL.rawset(
+            GLOBAL,
+            "_codex_companion_wheel_mouse_handler",
+            GLOBAL.TheInput:AddMouseButtonHandler(
+                function(button, down)
+                    if not down and button == wheel_key then
+                        ToggleCompanionWheel()
+                    end
+                end
+            )
+        )
+    else
+        GLOBAL.TheInput:AddKeyUpHandler(
+            wheel_key,
+            ToggleCompanionWheel
+        )
+    end
+    GLOBAL.rawset(
+        GLOBAL,
+        "_codex_companion_wheel_key_registered",
+        true
+    )
+    print(
+        "[Glimmer Companion] command wheel key registered",
+        wheel_key_name,
+        wheel_key
+    )
+end
+
+local function ApplyCompanionWheel(controls)
+    if controls == nil or controls.commandwheel == nil then
+        return false
+    end
+    local BuildWheelItems =
+        require "widgets/glimmer_command_wheel"
+    local Menu = require "glimmer_wheel_menu"
+    local wheel = controls.commandwheel
+    local pending_command = nil
+    wheel.OnCancel = function()
+        pending_command = nil
+        CloseCompanionWheel(wheel)
+    end
+    wheel.OnExecute = function()
+        local command = pending_command
+        pending_command = nil
+        CloseCompanionWheel(wheel)
+        if command ~= nil then
+            SubmitWheelCommand(command)
+        end
+    end
+    wheel.selected_label:SetSize(30)
+    wheel:SetItems(
+        BuildWheelItems(
+            Menu.branches,
+            "root",
+            function(command)
+                pending_command = command
+            end
+        ),
+        175,
+        178
+    )
+    if glimmer_command_wheel ~= wheel then
+        print("[Glimmer Companion] command wheel initialized")
+    end
+    glimmer_command_wheel = wheel
+    return true
 end
 
 local function ExtractCompanionChat(message)
@@ -790,7 +887,7 @@ local function LoadLegacyCompanionState(callback)
 end
 
 local function PrepareCompanionEntity(inst)
-    if inst == nil or not inst:IsValid() or inst:HasTag(COMPANION_TAG) then
+    if inst == nil or not inst:IsValid() then
         return
     end
     if GLOBAL.TheWorld == nil or not GLOBAL.TheWorld.ismastersim then
@@ -1365,6 +1462,7 @@ AddPrefabPostInit("forest", ScheduleCompanionSupervisor)
 AddPrefabPostInit("cave", ScheduleCompanionSupervisor)
 
 AddSimPostInit(function()
+    RegisterCompanionWheelKey()
     InstallInGameChatHook()
     if GLOBAL.TheWorld ~= nil then
         GLOBAL.TheWorld._codex_companion_sim_hook = true
@@ -1418,6 +1516,7 @@ AddPlayerPostInit(function(inst)
         if not GLOBAL.TheWorld.ismastersim then
             return
         end
+        RegisterCompanionWheelKey()
         StartCompanionSupervisor(GLOBAL.TheWorld)
         GLOBAL.TheWorld._codex_primary_player = inst
         RequestControllerStart(GLOBAL.TheWorld, inst)
@@ -1425,50 +1524,21 @@ AddPlayerPostInit(function(inst)
     inst:DoTaskInTime(1, SpawnWhenWorldReady)
 end)
 
-if GLOBAL.TheNet ~= nil and GLOBAL.TheNet:GetIsClient() then
-    AddClassPostConstruct("widgets/controls", function(controls)
-        glimmer_controls = controls
-        if controls.top_root == nil
-            or controls.owner == nil
-            or glimmer_command_wheel ~= nil
-        then
-            return
-        end
-        local GlimmerCommandWheel =
-            require "widgets/glimmer_command_wheel"
-        local wheel_root = controls.commandwheelroot
-            or controls.top_root
-        glimmer_command_wheel = wheel_root:AddChild(
-            GlimmerCommandWheel(controls.owner, SubmitWheelCommand)
-        )
-        glimmer_command_wheel:SetScale(GLOBAL.TheFrontEnd:GetHUDScale())
-        glimmer_command_wheel:Hide()
-    end)
-
-    local wheel_key_name = GetModConfigData("wheel_key") or "KEY_F8"
-    local wheel_key = GLOBAL[wheel_key_name]
-    if type(wheel_key) == "number" then
-        GLOBAL.TheInput:AddKeyUpHandler(
-            wheel_key,
-            ToggleCompanionWheel
-        )
+AddClassPostConstruct("widgets/controls", function(controls)
+    if controls == nil or controls.owner ~= GLOBAL.ThePlayer then
+        return
     end
-
-    AddComponentPostInit("playercontroller", function(controller, inst)
-        if inst ~= GLOBAL.ThePlayer then
-            return
+    glimmer_controls = controls
+    if type(controls.BuildCommandWheel) == "function"
+        and not controls._codex_glimmer_build_wheel_hooked
+    then
+        local original_build_command_wheel = controls.BuildCommandWheel
+        controls.BuildCommandWheel = function(self, ...)
+            local result = original_build_command_wheel(self, ...)
+            ApplyCompanionWheel(self)
+            return result
         end
-        local original_on_control = controller.OnControl
-        controller.OnControl = function(self, control, down)
-            if glimmer_command_wheel ~= nil
-                and glimmer_command_wheel:IsOpen()
-            then
-                if down and control == GLOBAL.CONTROL_CANCEL then
-                    glimmer_command_wheel:OnCancel()
-                end
-                return true
-            end
-            return original_on_control(self, control, down)
-        end
-    end)
-end
+        controls._codex_glimmer_build_wheel_hooked = true
+    end
+    ApplyCompanionWheel(controls)
+end)

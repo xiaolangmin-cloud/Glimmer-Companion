@@ -8,8 +8,10 @@ from controller.config import Settings
 from controller.service import CompanionService
 from controller.wheel_commands import (
     AMOUNTS,
+    RESOURCE_TARGETS,
     WHEEL_BRANCH_IDS,
     WheelCommandError,
+    build_intent,
     normalize_selection,
 )
 
@@ -138,6 +140,20 @@ class WheelCommandTests(unittest.TestCase):
         self.assertNotIn("mode", movement.context())
         self.assertNotIn("target_shard", movement.context())
 
+    def test_recover_tent_forces_immediate_recovery_check(self) -> None:
+        command = normalize_selection(
+            {
+                "schema": 1,
+                "branch_id": "survival",
+                "action": "recover_tent",
+            }
+        )
+        intent, reply = build_intent(command, self.snapshot())
+        self.assertEqual(reply, "好，我会在条件合适时去帐篷恢复三维。")
+        self.assertEqual(intent["mode"], "follow")
+        self.assertFalse(intent["params"]["ignore_autonomous_recovery"])
+        self.assertTrue(intent["params"]["force_recovery_check"])
+
     def test_wheel_commands_are_local_and_respect_amount(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             service = self.make_service(Path(tmp))
@@ -169,6 +185,106 @@ class WheelCommandTests(unittest.TestCase):
                 )
                 self.assertEqual(status["intent"]["intent_id"], before)
                 self.assertIn("生命 70/75", status["messages"][-1]["text"])
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_gold_collection_selects_real_gold_rocks_and_tool_workflow(
+        self,
+    ) -> None:
+        self.assertEqual(RESOURCE_TARGETS["gold"]["prefabs"], ["rock2"])
+        self.assertEqual(RESOURCE_TARGETS["gold"]["drop"], "goldnugget")
+        self.assertEqual(RESOURCE_TARGETS["gold"]["tool"], "pickaxe")
+        self.assertEqual(RESOURCE_TARGETS["wood"]["tool"], "axe")
+        self.assertNotIn(
+            "twiggytree",
+            RESOURCE_TARGETS["wood"]["prefabs"],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(Path(tmp))
+            service.planner = ExplodingPlanner()
+            try:
+                service.tick(self.snapshot())
+                state = service.wheel_command(
+                    {
+                        "schema": 1,
+                        "branch_id": "collection",
+                        "action": "collect_resource",
+                        "target_id": "gold",
+                        "amount": 10,
+                    }
+                )
+                params = state["intent"]["params"]
+                self.assertEqual(state["intent"]["mode"], "harvest_area")
+                self.assertEqual(params["target_prefabs"], ["rock2"])
+                self.assertEqual(params["drop_prefab"], "goldnugget")
+                self.assertEqual(params["required_tool"], "pickaxe")
+                self.assertEqual(
+                    params["assist_minion_prefab"],
+                    "shadowworker",
+                )
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_plant_uses_existing_soil_and_can_prepare_a_new_plot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(Path(tmp))
+            service.planner = ExplodingPlanner()
+            snapshot = self.snapshot()
+            snapshot["inventory_counts"] = {"carrot_seeds": 3}
+            try:
+                service.tick(snapshot)
+                plant = service.wheel_command(
+                    {
+                        "schema": 1,
+                        "branch_id": "farming",
+                        "action": "plant",
+                        "target_id": "carrot_seeds",
+                    }
+                )
+                plant_params = plant["intent"]["params"]
+                self.assertEqual(plant["intent"]["mode"], "deploy")
+                self.assertTrue(plant_params["prefer_existing_soil"])
+                self.assertTrue(plant_params["till_if_needed"])
+                self.assertEqual(plant_params["soil_search_radius"], 16)
+
+                till = service.wheel_command(
+                    {
+                        "schema": 1,
+                        "branch_id": "farming",
+                        "action": "till",
+                    }
+                )
+                till_params = till["intent"]["params"]
+                self.assertEqual(till["intent"]["mode"], "till")
+                self.assertEqual(till_params["required_tool"], "farm_hoe")
+                self.assertTrue(till_params["craft_tool_if_missing"])
+            finally:
+                service.stop()
+                service.memory.close()
+
+    def test_mature_crop_harvest_allows_partial_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(Path(tmp))
+            service.planner = ExplodingPlanner()
+            try:
+                service.tick(self.snapshot())
+                state = service.wheel_command(
+                    {
+                        "schema": 1,
+                        "branch_id": "farming",
+                        "action": "harvest",
+                        "amount": 5,
+                    }
+                )
+                self.assertEqual(state["intent"]["mode"], "harvest_area")
+                self.assertEqual(state["intent"]["params"]["amount"], 5)
+                self.assertTrue(
+                    state["intent"]["params"]["allow_partial"],
+                )
+                self.assertIn("最多 5 个", state["messages"][-1]["text"])
             finally:
                 service.stop()
                 service.memory.close()

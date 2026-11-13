@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import re
 import threading
 import time
 import uuid
@@ -17,11 +18,13 @@ from .characters import CharacterPreferenceStore
 from .config import Settings
 from .decision_branches import BranchMatch, DecisionBranchRouter
 from .deepseek import DeepSeekError, DeepSeekPlanner
+from .experience_coordinator import ExperienceCoordinator, is_local_completion_event
 from .journal import CompanionJournal
 from .memory import MemoryStore
 from .mod_knowledge import IMPLEMENTATION_NOTES
 from .playbooks import PlaybookMatch, PlaybookMatcher
 from .research import CodexResearchService, ResearchError
+from .strategy_advisor import StrategyAdvisor
 from .wheel_commands import (
     WheelSelection,
     build_intent,
@@ -37,7 +40,6 @@ IMPORTANT_EVENTS = {
     "combat_target_lost",
     "combat_target_defeated",
     "inventory_full",
-    "companion_dead",
     "critical_hunger",
     "critical_health",
 }
@@ -54,6 +56,22 @@ CROSS_WORLD_REPLY = (
     "不能进入另一个世界。控制器已阻止这条指令：微光只能在当前世界行动，"
     "过世界必须由你本人通过传送门或洞口带着它切换。"
 )
+
+COMPACT_REPLY_SOURCES = {
+    "ambient",
+    "branch_policy",
+    "deepseek",
+    "playbook",
+    "playbook_completion",
+    "task",
+    "wheel",
+}
+INTERNAL_REPLY_TEXT = re.compile(
+    r"优先级|仲裁器|意图\s*ID|intent_id|\bGUID\b|后台记录|内部仲裁|"
+    r"\bmode\s*=|\bparams\s*=",
+    re.IGNORECASE,
+)
+PLAYER_REPLY_MAX_CHARS = 96
 
 RECOVERY_REASON_TEXT = {
     "recovery_food_missing": "饥饿偏低，但没有能吃的食物",
@@ -73,6 +91,62 @@ RECOVERY_REASON_TEXT = {
     "clock_missing": "无法读取当前昼夜时间",
     "recovery_tent_unreachable": "无法走到附近帐篷",
     "tent_enter_failed": "到达帐篷后仍无法进入睡眠",
+}
+
+DEATH_CAUSE_TEXT = {
+    "cold": "冻死",
+    "hunger": "饿死",
+    "hot": "过热死",
+    "fire": "烧死",
+    "poison": "中毒死",
+    "sanity": "精神崩溃",
+    "darkness": "被黑暗里的查理杀死",
+}
+
+ENTITY_DEATH_TEXT = {
+    "frog": "青蛙",
+    "frog_red": "红青蛙",
+    "frog_brightmare": "亮眼青蛙",
+    "spider": "蜘蛛",
+    "spider_warrior": "蜘蛛战士",
+    "spider_hider": "洞穴蜘蛛",
+    "spider_spitter": "喷射蜘蛛",
+    "hound": "猎犬",
+    "firehound": "红猎犬",
+    "icehound": "蓝猎犬",
+    "worm": "洞穴蠕虫",
+    "tentacle": "触手",
+    "merm": "鱼人",
+    "pigman": "猪人",
+    "pigguard": "猪人守卫",
+    "bunnyman": "兔人",
+}
+
+TASK_MODE_TEXT = {
+    "hold": "原地等待",
+    "follow": "跟随你",
+    "move_to": "移动",
+    "move_to_landmark": "前往地点",
+    "remember_location": "记住地点",
+    "homestead": "在基地待命",
+    "combat": "战斗",
+    "guard": "警戒并处理威胁",
+    "collect_loot": "收集战利品",
+    "harvest": "采集",
+    "harvest_area": "区域采集",
+    "gather": "拾取",
+    "craft": "制作",
+    "build": "建造",
+    "deploy": "放置物品",
+    "plant": "种植",
+    "till": "耕地",
+    "equip": "更换装备",
+    "unequip": "卸下装备",
+    "eat": "吃东西",
+    "fetch_item": "取物资",
+    "deliver_item": "交付物品",
+    "retreat": "撤退",
+    "operate": "操作目标",
 }
 
 EMERGENCY_CATEGORY_TEXT = {
@@ -103,6 +177,10 @@ EMERGENCY_ACTION_TEXT = {
     "already_lit": "附近已经有光",
     "equipped_protection": "我已经换上防护装备",
     "seek_shelter": "我先去附近避雨处",
+    "seek_warmth": "我先靠近火源取暖",
+    "refuel_warmth": "我先给附近的火添燃料",
+    "building_warmth": "我先用普通材料生一堆火",
+    "no_heat_available": "我没找到火源，也没有足够材料生火",
     "no_light_available": "我没找到可用光源",
     "continue_task_override": "你要求继续任务，所以我不中断，但会保留这次高风险选择的记录",
 }
@@ -188,6 +266,12 @@ EMERGENCY_DETECTED_LINES = {
     ),
 }
 
+EMERGENCY_WORM_DETECTED_LINES = (
+    "地底有东西钻出来啦！",
+    "脚下震得厉害，有蠕虫冒头！",
+    "泥土炸开啦，洞穴蠕虫出来啦！",
+)
+
 EMERGENCY_ACTION_LINES = {
     "fight": (
         "我先把近处的坏家伙赶走！",
@@ -243,6 +327,22 @@ EMERGENCY_ACTION_LINES = {
         "那边能躲，我先进去！",
         "我看到避雨处啦，快跟上！",
         "先躲一下，别让酸雨啃衣服！",
+    ),
+    "seek_warmth": (
+        "附近有火，我马上过去暖和一下。",
+        "我先靠近火堆，缓过来再继续。",
+    ),
+    "refuel_warmth": (
+        "火快灭了，我先添一点普通燃料。",
+        "我先保住这堆火，别浪费更好的材料。",
+    ),
+    "building_warmth": (
+        "附近没有火，我用普通材料生一堆。",
+        "我先点个营火，不能一直冻着。",
+    ),
+    "no_heat_available": (
+        "没有火源，我也没有足够材料生火。",
+        "这次没法自己取暖，我需要先换个安全位置。",
     ),
     "no_light_available": (
         "糟糕，我包里没有能点的东西……先来找你！",
@@ -324,6 +424,12 @@ EMERGENCY_RESOLVED_LINES = {
     ),
 }
 
+EMERGENCY_WORM_RESOLVED_LINES = (
+    "地底安静了，那条蠕虫钻回去啦。",
+    "土不再翻了，洞穴蠕虫走掉啦。",
+    "脚下消停了，总算不用防它冒头啦。",
+)
+
 
 def emergency_category_text(event: dict[str, Any]) -> str:
     category = str(event.get("category") or "")
@@ -370,6 +476,62 @@ def recovery_unavailable_detail(event: dict[str, Any]) -> str:
     return RECOVERY_REASON_TEXT.get(reason, "当前条件不适合睡觉")
 
 
+def death_report(event: dict[str, Any]) -> str:
+    raw_cause = str(event.get("cause") or "").strip()
+    afflicter = str(event.get("afflicter") or "").strip()
+    inferred_cause = str(event.get("inferred_cause") or "").strip().lower()
+    cause_key = raw_cause.lower()
+    if cause_key in DEATH_CAUSE_TEXT:
+        direct = DEATH_CAUSE_TEXT[cause_key]
+    elif afflicter:
+        direct = f"被{ENTITY_DEATH_TEXT.get(afflicter, afflicter)}杀死"
+    elif inferred_cause in DEATH_CAUSE_TEXT:
+        direct = DEATH_CAUSE_TEXT[inferred_cause]
+    elif raw_cause and cause_key not in {"nil", "none", "unknown"}:
+        direct = f"死因为 {raw_cause}"
+    elif event.get("freezing") is True:
+        direct = DEATH_CAUSE_TEXT["cold"]
+    elif event.get("overheating") is True:
+        direct = DEATH_CAUSE_TEXT["hot"]
+    elif event.get("in_light") is False:
+        direct = DEATH_CAUSE_TEXT["darkness"]
+    else:
+        direct = "游戏事件没有提供可识别的直接死因"
+
+    vitals = []
+    for key, label in (
+        ("health", "生命"),
+        ("hunger", "饥饿"),
+        ("sanity", "精神"),
+    ):
+        value = event.get(key)
+        maximum = event.get(f"{key}_max")
+        percent = event.get(f"{key}_percent")
+        if value is None:
+            continue
+        if maximum is not None:
+            vitals.append(f"{label} {value}/{maximum}")
+        elif percent is not None:
+            vitals.append(f"{label} {value}（{percent}%）")
+        else:
+            vitals.append(f"{label} {value}")
+
+    temperature = ""
+    if event.get("freezing") is True:
+        temperature = "当时处于过冷。"
+    elif event.get("overheating") is True:
+        temperature = "当时处于过热。"
+
+    task_mode = str(event.get("active_mode") or "")
+    task = (
+        f"当时任务：{TASK_MODE_TEXT.get(task_mode, task_mode)}。"
+        if task_mode
+        else ""
+    )
+    evidence = "、".join(vitals) if vitals else "死亡前三维数据没有上报"
+    return f"我已经倒下。直接死因：{direct}。死亡前：{evidence}。{temperature}{task}"
+
+
 class CompanionService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -401,7 +563,9 @@ class CompanionService:
             )
         )
         self.branch_policies = BranchPolicyEngine()
+        self.strategy_advisor = StrategyAdvisor()
         self.arbiter = IntentArbiter(settings.default_lease_seconds)
+        self.experience = ExperienceCoordinator()
         prompt = settings.prompt_path.read_text(encoding="utf-8")
         self.planner = DeepSeekPlanner(
             api_key=settings.deepseek_api_key,
@@ -441,7 +605,9 @@ class CompanionService:
         self._agent_memory_closed = False
         self._world_memory_last_scan = 0.0
         self._emergency_line_counts: dict[tuple[str, str, str], int] = {}
+        self._recent_reply_at: dict[tuple[str, str], float] = {}
         self._last_world_session_id: str | None = None
+        self._schedule_wake_at: dict[int, float] = {}
 
     def start(self) -> None:
         if self._thread is not None:
@@ -487,6 +653,13 @@ class CompanionService:
 
     def tick(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         self._remember_world_snapshot(snapshot)
+        shard = str((snapshot.get("world") or {}).get("shard") or "")
+        if shard:
+            snapshot["world_points"] = self.agent_memory.world_context(
+                shard,
+                limit=40,
+            )
+        snapshot = self.strategy_advisor.enrich(snapshot)
         session_id = str((snapshot.get("world") or {}).get("session_id") or "")
         with self._lock:
             snapshot = dict(snapshot)
@@ -506,6 +679,7 @@ class CompanionService:
                         "reason": "session_started_follow",
                     },
                     source="session_boundary",
+                    clear_pending=True,
                 )
                 self._record_intent_change(
                     previous,
@@ -536,10 +710,7 @@ class CompanionService:
                 for event in (snapshot.get("events") or [])
                 if isinstance(event, dict)
                 and str(event.get("type")) in IMPORTANT_EVENTS
-                and not (
-                    str(event.get("type")) == "task_complete"
-                    and str(event.get("mode")) == "collect_loot"
-                )
+                and not is_local_completion_event(event)
                 and not (
                     str(event.get("type")) == "task_failed"
                     and str(event.get("reason")) in {
@@ -579,7 +750,57 @@ class CompanionService:
         character_selection = self.character_selection()
         state["companion_character"] = character_selection["prefab"]
         state["character_selection"] = character_selection
+        self._maybe_wake_due_schedule(snapshot)
         return state
+
+    def _maybe_wake_due_schedule(
+        self,
+        snapshot: dict[str, Any],
+    ) -> None:
+        world = snapshot.get("world") or {}
+        due = self.agent_memory.due_scheduled_tasks(
+            day=world.get("day"),
+            phase=world.get("phase"),
+            moon_phase=world.get("moon_phase"),
+            shard=world.get("shard"),
+            limit=1,
+        )
+        if not due:
+            return
+        task = due[0]
+        now = time.monotonic()
+        task_id = int(task["id"])
+        if now - self._schedule_wake_at.get(task_id, 0.0) < 120:
+            return
+        self._schedule_wake_at[task_id] = now
+        self.agent_memory.update_scheduled_task(
+            task_id,
+            mark_triggered=True,
+        )
+        instruction = (
+            f"持久排程已到期：{task['goal']}。"
+            f"排程类型 {task['kind']}，编号 {task_id}。"
+            "先核对当前世界、位置、背包和安全状态，再按计划执行；"
+            "完成后使用 schedule_updates 把该排程标记为 completed。"
+        )
+        with self._lock:
+            if self._pending_instruction is None:
+                self._pending_instruction = instruction
+                self._pending_trigger = "schedule_due"
+                self._pending_playbooks = []
+                self._pending_branch = None
+                self._wake.set()
+        self.journal.record(
+            "schedule.triggered",
+            f"到期待办已触发：{task['goal']}",
+            data={
+                "schedule_id": task_id,
+                "kind": task["kind"],
+                "due_day": task.get("due_day"),
+                "due_phase": task.get("due_phase"),
+                "due_moon_phase": task.get("due_moon_phase"),
+            },
+        )
 
     def _remember_world_snapshot(self, snapshot: dict[str, Any]) -> None:
         now = time.monotonic()
@@ -720,13 +941,31 @@ class CompanionService:
         match: PlaybookMatch,
         branch: BranchMatch | None = None,
     ) -> dict[str, Any]:
-        if branch is not None and match.intent is not None:
-            self._activate_branch(branch, "playbook")
         previous = self.arbiter.active()
         current = previous
+        queued = False
         if match.intent is not None:
-            current = self.arbiter.set(match.intent, source="playbook")
-            self._record_intent_change(previous, current, "playbook")
+            current, queued = self.arbiter.submit(
+                match.intent,
+                source="playbook",
+            )
+            if queued:
+                self.journal.record(
+                    "task.queued",
+                    "新任务优先级较低，已等待当前任务结束",
+                    data={
+                        "intent_id": current.intent_id,
+                        "queued_intent_id": match.intent.get("intent_id"),
+                        "active_mode": current.mode,
+                        "source": "playbook",
+                    },
+                )
+            else:
+                self._record_intent_change(previous, current, "playbook")
+        if branch is not None and match.intent is not None and not queued:
+            self._activate_branch(branch, "playbook")
+        elif branch is not None and match.intent is None:
+            self._activate_branch(branch, "playbook")
         self.journal.record(
             "task.playbook_matched",
             f"任务匹配到预写方案：{match.playbook_id}",
@@ -739,7 +978,16 @@ class CompanionService:
                 "branch_id": branch.branch_id if branch is not None else None,
             },
         )
-        if match.reply:
+        if queued:
+            self._publish_reply(
+                {
+                    "text": self._queued_command_reply(match.intent, current),
+                    "expects_response": False,
+                },
+                str(match.intent.get("intent_id") or current.intent_id),
+                "task",
+            )
+        elif match.reply:
             self._publish_reply(
                 {"text": match.reply, "expects_response": False},
                 current.intent_id,
@@ -749,6 +997,7 @@ class CompanionService:
         state["messages"] = list(self._messages)
         state["message_received"] = True
         state["playbook_matched"] = match.playbook_id
+        state["command_queued"] = queued
         if branch is not None and match.intent is None:
             state["query_branch"] = branch.context()
         state["decision_branch"] = (
@@ -764,14 +1013,28 @@ class CompanionService:
         decision: PolicyDecision,
         branch: BranchMatch,
     ) -> dict[str, Any]:
-        self._activate_branch(branch, "branch_policy")
         self._last_local_policy = decision.to_dict()
+        if decision.schedule is not None:
+            self._apply_schedule_actions({"schedule": decision.schedule})
         previous = self.arbiter.active()
-        current = self.arbiter.set(
+        current, queued = self.arbiter.submit(
             decision.intent,
             source="branch_policy",
         )
-        self._record_intent_change(previous, current, "branch_policy")
+        if queued:
+            self.journal.record(
+                "task.queued",
+                "新任务优先级较低，已等待当前任务结束",
+                data={
+                    "intent_id": current.intent_id,
+                    "queued_intent_id": decision.intent.get("intent_id"),
+                    "active_mode": current.mode,
+                    "source": "branch_policy",
+                },
+            )
+        else:
+            self._activate_branch(branch, "branch_policy")
+            self._record_intent_change(previous, current, "branch_policy")
         self.journal.record(
             "task.local_policy",
             decision.reply,
@@ -781,20 +1044,30 @@ class CompanionService:
                 "confidence": decision.confidence,
                 "reason": decision.reason,
                 "intent_id": current.intent_id,
+                "queued": queued,
             },
         )
         self._publish_reply(
             {
-                "text": decision.reply,
+                "text": (
+                    self._queued_command_reply(decision.intent, current)
+                    if queued
+                    else decision.reply
+                ),
                 "expects_response": False,
             },
-            current.intent_id,
+            (
+                str(decision.intent.get("intent_id") or current.intent_id)
+                if queued
+                else current.intent_id
+            ),
             "branch_policy",
         )
         state = self.arbiter.snapshot()
         state["messages"] = list(self._messages)
         state["message_received"] = True
         state["local_policy_matched"] = decision.rule_id
+        state["command_queued"] = queued
         state["decision_branch"] = branch.context()
         state["last_error"] = self._last_error
         return state
@@ -836,9 +1109,31 @@ class CompanionService:
             )
             return self.arbiter.snapshot()
         previous = self.arbiter.active()
-        current = self.arbiter.set(payload, source="manual")
-        self._record_intent_change(previous, current, "manual")
-        return self.arbiter.snapshot()
+        current, queued = self.arbiter.submit(payload, source="manual")
+        if queued:
+            self.journal.record(
+                "task.queued",
+                "手动命令优先级较低，已等待当前任务结束",
+                data={
+                    "intent_id": current.intent_id,
+                    "queued_intent_id": payload.get("intent_id"),
+                    "active_mode": current.mode,
+                    "source": "manual",
+                },
+            )
+            self._publish_reply(
+                {
+                    "text": self._queued_command_reply(payload, current),
+                    "expects_response": False,
+                },
+                str(payload.get("intent_id") or current.intent_id),
+                "task",
+            )
+        else:
+            self._record_intent_change(previous, current, "manual")
+        state = self.arbiter.snapshot()
+        state["command_queued"] = queued
+        return state
 
     def wheel_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Execute one validated wheel selection without language inference."""
@@ -911,27 +1206,48 @@ class CompanionService:
             state["last_error"] = self._last_error
             return state
 
-        self._activate_branch(branch, "wheel")
         previous = self.arbiter.active()
-        current = self.arbiter.set(intent, source="wheel")
-        self._record_intent_change(previous, current, "wheel")
+        current, queued = self.arbiter.submit(intent, source="wheel")
+        if not queued:
+            self._activate_branch(branch, "wheel")
+            self._record_intent_change(previous, current, "wheel")
         self._publish_reply(
-            {"text": reply, "expects_response": False},
-            current.intent_id,
+            {
+                "text": (
+                    self._queued_command_reply(intent, current)
+                    if queued
+                    else reply
+                ),
+                "expects_response": False,
+            },
+            (
+                str(intent.get("intent_id") or current.intent_id)
+                if queued
+                else current.intent_id
+            ),
             "wheel",
         )
         self.journal.record(
-            "wheel.accepted",
-            reply,
+            "wheel.queued" if queued else "wheel.accepted",
+            (
+                self._queued_command_reply(intent, current)
+                if queued
+                else reply
+            ),
             data={
                 **command.context(),
                 "intent_id": current.intent_id,
+                "queued_intent_id": (
+                    intent.get("intent_id") if queued else None
+                ),
                 "mode": current.mode,
+                "queued": queued,
             },
         )
         state = self.arbiter.snapshot()
         state["messages"] = list(self._messages)
         state["wheel_command_received"] = True
+        state["command_queued"] = queued
         state["decision_branch"] = branch.context()
         state["last_error"] = self._last_error
         return state
@@ -1053,11 +1369,15 @@ class CompanionService:
                 loot = companion.get("loot_collection")
                 if isinstance(loot, dict):
                     return (
-                        f"当前任务是 {intent.mode}，正在收集，"
+                        f"我现在在{TASK_MODE_TEXT.get(intent.mode, '做手上的事')}，"
+                        "正在收集，"
                         f"目标 {loot.get('desired_amount', 0)} 个，"
                         f"已经确认击倒来源 {loot.get('kills', 0)} 个。"
                     )
-                return f"当前任务是 {intent.mode}，原因：{intent.reason}。"
+                return (
+                    "我现在"
+                    f"{TASK_MODE_TEXT.get(intent.mode, '正在处理手上的事情')}。"
+                )
             if command.action == "nearby":
                 nearby = [
                     entity
@@ -1184,7 +1504,9 @@ class CompanionService:
                     if self._active_branch is not None
                     else None
                 ),
+                "decision_support": self._latest.get("decision_support"),
                 "last_local_policy": self._last_local_policy,
+                "experience": self.experience.snapshot(),
             }
         )
         return result
@@ -1292,20 +1614,27 @@ class CompanionService:
         current = str(world.get("shard") or "")
         block_key = f"{original_id}:{mode}:{current}:{target}"
         previous = self.arbiter.active()
-        safe = self.arbiter.set(
-            {
-                "intent_id": f"cross-world-blocked-{uuid.uuid4()}",
-                "mode": "hold",
-                "lease_seconds": 24 * 60 * 60,
-                "reason": "cross_world_forbidden",
-                "params": {
-                    "blocked_mode": mode,
-                    "blocked_target_shard": target,
+        if previous.priority >= 70:
+            safe = previous
+        else:
+            safe = self.arbiter.set(
+                {
+                    "intent_id": f"cross-world-blocked-{uuid.uuid4()}",
+                    "mode": "hold",
+                    "lease_seconds": 24 * 60 * 60,
+                    "reason": "cross_world_forbidden",
+                    "params": {
+                        "blocked_mode": mode,
+                        "blocked_target_shard": target,
+                    },
                 },
-            },
-            source=source,
-        )
-        self._record_intent_change(previous, safe, "controller_world_guard")
+                source=source,
+            )
+            self._record_intent_change(
+                previous,
+                safe,
+                "controller_world_guard",
+            )
 
         self._cross_world_block_seen = {
             key: seen_at
@@ -1341,23 +1670,33 @@ class CompanionService:
     ) -> str:
         category = str(event.get("category") or "")
         action = str(event.get("action") or "")
+        source_prefab = str(event.get("source_prefab") or "")
+        worm_wave = category == "hound_wave" and source_prefab == "worm"
         if kind == "resolved":
-            lines = EMERGENCY_RESOLVED_LINES.get(
-                category,
-                ("危险过去啦，我回来啦。",),
-            )
-            line_key = f"resolved:{category}"
+            if worm_wave:
+                lines = EMERGENCY_WORM_RESOLVED_LINES
+                line_key = f"resolved:{category}:worm"
+            else:
+                lines = EMERGENCY_RESOLVED_LINES.get(
+                    category,
+                    ("危险过去啦，我回来啦。",),
+                )
+                line_key = f"resolved:{category}"
         elif kind == "action":
             lines = EMERGENCY_ACTION_LINES.get(action)
             if not lines:
                 return emergency_action_text(event) + "。"
             line_key = f"action:{category}:{action}"
         else:
-            lines = EMERGENCY_DETECTED_LINES.get(
-                category,
-                ("有危险啦！我先按应急规则处理！",),
-            )
-            line_key = f"detected:{category}"
+            if worm_wave:
+                lines = EMERGENCY_WORM_DETECTED_LINES
+                line_key = f"detected:{category}:worm"
+            else:
+                lines = EMERGENCY_DETECTED_LINES.get(
+                    category,
+                    ("有危险啦！我先按应急规则处理！",),
+                )
+                line_key = f"detected:{category}"
 
         count_key = (line_key, category, action)
         count = self._emergency_line_counts.get(count_key, 0)
@@ -1397,9 +1736,19 @@ class CompanionService:
             self._event_seen[signature] = now
             event_type = str(event.get("type") or "unknown")
             reason = event.get("reason")
+            experience_outcome = self.experience.observe_event(
+                event,
+                self.arbiter.active(),
+                snapshot,
+                now=now,
+            )
             level = (
                 "error"
                 if event_type in {"task_failed", "companion_dead"}
+                or (
+                    event_type == "task_complete"
+                    and experience_outcome.verified is False
+                )
                 else "warning"
                 if event_type in {
                     "task_blocked",
@@ -1431,6 +1780,14 @@ class CompanionService:
                 "emergency_resolved": "微光确认应急危险已经解除",
             }
             message = messages.get(event_type, f"游戏事件：{event_type}")
+            if event_type == "companion_dead":
+                message = death_report(event)
+            if (
+                event_type == "task_complete"
+                and experience_outcome.handled
+                and not experience_outcome.accepted
+            ):
+                message = "任务完成事件未通过证据校验"
             if (
                 event_type == "combat_target_defeated"
                 and not event.get("verified")
@@ -1446,6 +1803,18 @@ class CompanionService:
                 message = "微光饱食度不足且没有可用食物，已取消远行并返回跟随"
             elif event_type == "task_failed" and reason == "survival_health_low":
                 message = "微光生命值过低，已取消远行并返回跟随"
+            elif event_type == "task_failed" and reason in {
+                "tool_not_found",
+                "tool_recipe_not_known",
+                "tool_ingredients_missing",
+                "tool_recipe_missing",
+                "tool_craft_start_failed",
+                "tool_craft_timeout",
+                "tool_equip_failed",
+            }:
+                message = "微光没有可用工具，也暂时无法自行制作，已停止采集"
+            elif event_type == "task_failed" and reason == "target_exhausted":
+                message = "附近可用资源已经采完，但实际数量还没有达到要求"
             elif event_type == "recovery_unavailable":
                 message = (
                     "微光无法自行恢复（"
@@ -1454,6 +1823,10 @@ class CompanionService:
                 )
             elif event_type == "tactical_spell":
                 spell_name = {
+                    "shadow_worker": "暗影仆从",
+                    "shadow_protector": "暗影保护者",
+                    "shadow_trap": "暗影陷阱",
+                    "shadow_pillars": "暗影柱",
                     "shadow_duelist": "暗影决斗者",
                     "shadow_sneak": "暗影蝶",
                     "shadow_prison": "暗影牢笼",
@@ -1495,6 +1868,7 @@ class CompanionService:
             }
             data.update(
                 {
+                    "experience": experience_outcome.to_dict(),
                     "shard": world.get("shard"),
                     "companion_position": [
                         companion.get("x"),
@@ -1512,6 +1886,148 @@ class CompanionService:
                 level=level,
                 data=data,
             )
+            if experience_outcome.handled:
+                current = self.arbiter.active()
+                resumed = False
+                if experience_outcome.transition_intent is not None:
+                    current, resumed = self._finish_active_task(
+                        experience_outcome.transition_intent,
+                        source="experience_coordinator",
+                        expected_intent_id=event.get("intent_id"),
+                    )
+                reply_text = experience_outcome.reply
+                if experience_outcome.ignored:
+                    reply_text = None
+                elif (
+                    event_type == "recovery_unavailable"
+                    and reply_text is None
+                ):
+                    reply_text = (
+                        "我想自己恢复，但"
+                        + recovery_unavailable_detail(event)
+                        + "。"
+                    )
+                elif event_type == "emergency_action":
+                    reply_text = None
+                elif event_type in {
+                    "emergency_detected",
+                    "emergency_resolved",
+                }:
+                    reply_text = message
+                if reply_text:
+                    if event_type.startswith("recovery_"):
+                        reply_source = "recovery"
+                    elif event_type.startswith("emergency_"):
+                        reply_source = "emergency"
+                    else:
+                        reply_source = "playbook_completion"
+                    self._publish_reply(
+                        {
+                            "text": reply_text,
+                            "expects_response": False,
+                        },
+                        current.intent_id,
+                        reply_source,
+                    )
+                if resumed:
+                    self._publish_pending_resume(current)
+                continue
+            if event_type == "companion_dead":
+                previous = self.arbiter.active()
+                home = event.get("home")
+                home_name = (
+                    home.get("name")
+                    if isinstance(home, dict)
+                    else None
+                ) or (
+                    previous.params.get("landmark")
+                    if previous.mode == "homestead"
+                    and isinstance(previous.params, dict)
+                    else None
+                )
+                resume_home = previous.mode == "homestead" and home_name
+                death_payload = {
+                    "intent_id": (
+                        f"death-{'homestead' if resume_home else 'follow'}-"
+                        f"{event.get('event_id') or event.get('id') or uuid.uuid4()}"
+                    ),
+                    "mode": "homestead" if resume_home else "follow",
+                    "lease_seconds": 24 * 60 * 60,
+                    "reason": (
+                        "death_respawn_homestead"
+                        if resume_home
+                        else "death_respawn_follow"
+                    ),
+                }
+                if resume_home:
+                    death_payload["params"] = {
+                        "landmark": str(home_name),
+                        "stay_home": True,
+                        "stop_distance": 4,
+                    }
+                    if (
+                        isinstance(home, dict)
+                        and home.get("x") is not None
+                        and home.get("z") is not None
+                    ):
+                        death_payload["position"] = [
+                            float(home["x"]),
+                            float(home["z"]),
+                        ]
+                current = self.arbiter.set(
+                    death_payload,
+                    source="death_safety",
+                )
+                self._record_intent_change(
+                    previous,
+                    current,
+                    "death_safety",
+                )
+                if resume_home:
+                    message += f" 我会回到“{home_name}”继续驻守。"
+                self._publish_reply(
+                    {"text": message, "expects_response": False},
+                    current.intent_id,
+                    "safety",
+                )
+                continue
+            if event_type in {
+                "combat_target_defeated",
+                "combat_target_lost",
+            }:
+                current, resumed = self._finish_active_task(
+                    {
+                        "intent_id": (
+                            f"{event_type}-follow-"
+                            f"{event.get('event_id') or event.get('id') or uuid.uuid4()}"
+                        ),
+                        "mode": "follow",
+                        "lease_seconds": 86400,
+                        "reason": f"{event_type}_follow",
+                    },
+                    source="combat_completion",
+                    expected_intent_id=event.get("intent_id"),
+                )
+                if resumed:
+                    self._publish_pending_resume(current)
+                continue
+            if event_type == "task_complete":
+                current, resumed = self._finish_active_task(
+                    {
+                        "intent_id": (
+                            f"task-complete-follow-"
+                            f"{event.get('event_id') or event.get('id') or uuid.uuid4()}"
+                        ),
+                        "mode": "follow",
+                        "lease_seconds": 86400,
+                        "reason": "task_complete_follow",
+                    },
+                    source="task_completion",
+                    expected_intent_id=event.get("intent_id"),
+                )
+                if resumed:
+                    self._publish_pending_resume(current)
+                continue
             if event_type == "task_failed" and reason == "shard_transition":
                 previous = self.arbiter.active()
                 current = self.arbiter.set(
@@ -1560,48 +2076,27 @@ class CompanionService:
                     "safety",
                 )
             elif (
-                event_type == "task_complete"
-                and event.get("mode") == "collect_loot"
-            ):
-                previous = self.arbiter.active()
-                current = self.arbiter.set(
-                    {
-                        "intent_id": (
-                            f"collect-complete-follow-"
-                            f"{event.get('event_id') or event.get('id')}"
-                        ),
-                        "mode": "follow",
-                        "lease_seconds": 86400,
-                        "reason": "collect_complete_follow",
-                    },
-                    source="playbook_completion",
-                )
-                self._record_intent_change(
-                    previous,
-                    current,
-                    "playbook_completion",
-                )
-                item_name = {
-                    "silk": "蜘蛛丝",
-                    "monstermeat": "怪物肉",
-                }.get(
-                    str(event.get("item_prefab") or ""),
-                    str(event.get("item_prefab") or "物品"),
-                )
-                delivered = event.get("delivered_to_player", False)
-                amount = event.get("amount")
-                text = f"{item_name}收集好了，共 {amount} 个。"
-                if delivered:
-                    text += "已经交给你。"
-                self._publish_reply(
-                    {"text": text, "expects_response": False},
-                    current.intent_id,
-                    "playbook_completion",
-                )
-            elif (
                 event_type == "task_failed"
                 and reason in {"survival_hunger_low", "survival_health_low"}
             ):
+                if self.arbiter.active().mode == "homestead":
+                    self.journal.record(
+                        "base.survival_hold",
+                        "微光保持基地待命并转入本地恢复",
+                        data={
+                            "reason": reason,
+                            "intent_id": self.arbiter.active().intent_id,
+                        },
+                    )
+                    self._publish_reply(
+                        {
+                            "text": "我就在基地处理状态，不会继续远行，也不会改成跟着你乱跑。",
+                            "expects_response": False,
+                        },
+                        self.arbiter.active().intent_id,
+                        "safety",
+                    )
+                    continue
                 previous = self.arbiter.active()
                 current = self.arbiter.set(
                     {
@@ -1719,6 +2214,67 @@ class CompanionService:
                     self.arbiter.active().intent_id,
                     "emergency",
                 )
+            elif event_type == "task_failed":
+                current, resumed = self._finish_active_task(
+                    {
+                        "intent_id": (
+                            f"task-failed-follow-"
+                            f"{event.get('event_id') or event.get('id') or uuid.uuid4()}"
+                        ),
+                        "mode": "follow",
+                        "lease_seconds": 86400,
+                        "reason": "task_failed_follow",
+                    },
+                    source="task_failure",
+                    expected_intent_id=event.get("intent_id"),
+                )
+                if resumed:
+                    self._publish_pending_resume(current)
+
+    @staticmethod
+    def _queued_command_reply(
+        requested: dict[str, Any],
+        current: Any,
+    ) -> str:
+        del requested
+        if current.mode in {"combat", "guard"}:
+            return "我先把这场战斗收尾，结束后马上照你说的做。"
+        return "我先把手上这件事做完，马上执行你刚才的吩咐。"
+
+    def _finish_active_task(
+        self,
+        payload: dict[str, Any],
+        source: str,
+        expected_intent_id: Any = None,
+    ) -> tuple[Any, bool]:
+        previous = self.arbiter.active()
+        expected = str(expected_intent_id or "")
+        if expected and previous.intent_id != expected:
+            return previous, False
+        current, resumed = self.arbiter.finish(payload, source=source)
+        self._record_intent_change(previous, current, source)
+        return current, resumed
+
+    def _publish_pending_resume(self, current: Any) -> None:
+        task_text = TASK_MODE_TEXT.get(current.mode, current.mode)
+        self.journal.record(
+            "task.resumed",
+            f"高优先级任务结束，继续待执行任务：{current.mode}",
+            data={
+                "intent_id": current.intent_id,
+                "mode": current.mode,
+                "priority": current.priority,
+                "reason": current.reason,
+            },
+        )
+        self._publish_reply(
+            {
+                "text": f"手上这件事做完了，我继续刚才记下的“{task_text}”。",
+                "expects_response": False,
+            },
+            current.intent_id,
+            "task",
+        )
 
     def _record_intent_change(
         self,
@@ -1953,6 +2509,9 @@ class CompanionService:
     ) -> None:
         current = self.arbiter.active()
         intent = current
+        queued = False
+        submitted_payload: dict[str, Any] | None = None
+        self._apply_schedule_actions(response)
         if not force_chat_only:
             gap = response.get("capability_gap")
             if isinstance(gap, dict):
@@ -1970,17 +2529,24 @@ class CompanionService:
                         gap.get("suggested_implementation") or ""
                     ),
                 )
-                safe = self.arbiter.set(
-                    {
-                        "intent_id": f"capability-gap-{gap_id}",
-                        "mode": "hold",
-                        "lease_seconds": 300,
-                        "reason": "capability_gap",
-                        "params": {"gap_id": gap_id},
-                    },
-                    source="capability_gap",
-                )
-                self._record_intent_change(current, safe, "capability_gap")
+                if current.priority >= 70:
+                    safe = current
+                else:
+                    safe = self.arbiter.set(
+                        {
+                            "intent_id": f"capability-gap-{gap_id}",
+                            "mode": "hold",
+                            "lease_seconds": 300,
+                            "reason": "capability_gap",
+                            "params": {"gap_id": gap_id},
+                        },
+                        source="capability_gap",
+                    )
+                    self._record_intent_change(
+                        current,
+                        safe,
+                        "capability_gap",
+                    )
                 message = str(
                     gap.get("message")
                     or "这个功能目前做不到，我已经把具体缺口记录下来。"
@@ -2058,7 +2624,11 @@ class CompanionService:
                             reply_source=reply_source,
                         )
                         return
-                    intent = self.arbiter.set(intent_payload, source="deepseek")
+                    intent, queued = self.arbiter.submit(
+                        intent_payload,
+                        source="deepseek",
+                    )
+                    submitted_payload = intent_payload
             elif "mode" in response:
                 intent_payload = dict(response)
                 intent_payload.pop("reply", None)
@@ -2076,11 +2646,26 @@ class CompanionService:
                         reply_source=reply_source,
                     )
                     return
-                intent = self.arbiter.set(intent_payload, source="deepseek")
+                intent, queued = self.arbiter.submit(
+                    intent_payload,
+                    source="deepseek",
+                )
+                submitted_payload = intent_payload
             else:
                 # Chat-only response: retain the task currently being executed.
                 intent = current
-            if intent is not current:
+            if queued and submitted_payload is not None:
+                self.journal.record(
+                    "task.queued",
+                    "新任务优先级较低，已等待当前任务结束",
+                    data={
+                        "intent_id": current.intent_id,
+                        "queued_intent_id": submitted_payload.get("intent_id"),
+                        "active_mode": current.mode,
+                        "source": "deepseek",
+                    },
+                )
+            elif intent is not current:
                 self._record_intent_change(current, intent, "deepseek")
                 if branch is not None and intent.mode in {
                     "follow",
@@ -2096,13 +2681,150 @@ class CompanionService:
                         instruction or "",
                         self._latest,
                         intent=intent.to_dict(),
-                        task_type=branch.task_type if branch is not None else None,
+                        task_type=(
+                            branch.task_type
+                            if branch is not None
+                            else None
+                        ),
                     )
                 self._activate_branch(resolved_branch, "deepseek")
 
         reply = response.get("reply")
-        if isinstance(reply, dict) and reply.get("text"):
+        if queued and submitted_payload is not None:
+            self._publish_reply(
+                {
+                    "text": self._queued_command_reply(
+                        submitted_payload,
+                        current,
+                    ),
+                    "expects_response": False,
+                },
+                str(submitted_payload.get("intent_id") or intent.intent_id),
+                reply_source,
+            )
+        elif isinstance(reply, dict) and reply.get("text"):
             self._publish_reply(reply, intent.intent_id, reply_source)
+
+    def _apply_schedule_actions(
+        self,
+        response: dict[str, Any],
+    ) -> None:
+        schedule = response.get("schedule")
+        if isinstance(schedule, dict):
+            schedule = [schedule]
+        if isinstance(schedule, list):
+            for item in schedule[:5]:
+                if not isinstance(item, dict):
+                    continue
+                kind = str(item.get("kind") or "").strip()
+                goal = str(item.get("goal") or "").strip()
+                if not kind or not goal:
+                    continue
+                due_day_raw = item.get("due_day")
+                due_day = (
+                    int(due_day_raw)
+                    if isinstance(due_day_raw, (int, float))
+                    else None
+                )
+                x = item.get("x")
+                z = item.get("z")
+                task_id = self.agent_memory.save_scheduled_task(
+                    kind=kind,
+                    goal=goal,
+                    due_day=due_day,
+                    due_phase=str(item.get("due_phase") or "").lower()
+                    or None,
+                    due_moon_phase=str(
+                        item.get("due_moon_phase") or ""
+                    ).lower()
+                    or None,
+                    shard=str(item.get("shard") or "").strip() or None,
+                    x=float(x) if isinstance(x, (int, float)) else None,
+                    z=float(z) if isinstance(z, (int, float)) else None,
+                    details=(
+                        item.get("details")
+                        if isinstance(item.get("details"), dict)
+                        else {}
+                    ),
+                )
+                self.journal.record(
+                    "schedule.saved",
+                    f"已记住未来任务：{goal}",
+                    data={
+                        "schedule_id": task_id,
+                        "kind": kind,
+                        "due_day": due_day,
+                        "due_phase": item.get("due_phase"),
+                        "due_moon_phase": item.get("due_moon_phase"),
+                    },
+                )
+        updates = response.get("schedule_updates")
+        if isinstance(updates, dict):
+            updates = [updates]
+        if isinstance(updates, list):
+            for item in updates[:5]:
+                if not isinstance(item, dict):
+                    continue
+                task_id = item.get("schedule_id")
+                status = str(item.get("status") or "").strip()
+                if not isinstance(task_id, int) or not status:
+                    continue
+                x = item.get("x")
+                z = item.get("z")
+                self.agent_memory.update_scheduled_task(
+                    task_id,
+                    status=status,
+                    shard=str(item.get("shard") or "").strip() or None,
+                    x=float(x) if isinstance(x, (int, float)) else None,
+                    z=float(z) if isinstance(z, (int, float)) else None,
+                    details=(
+                        item.get("details")
+                        if isinstance(item.get("details"), dict)
+                        else None
+                    ),
+                )
+                self.journal.record(
+                    "schedule.updated",
+                    f"未来任务状态更新为 {status}",
+                    data={"schedule_id": task_id, "status": status},
+                )
+
+    @staticmethod
+    def _ambient_chat_allowed(
+        snapshot: dict[str, Any],
+        current: Any,
+    ) -> bool:
+        if current.mode in {"combat", "guard", "retreat", "homestead"}:
+            return False
+        companion = snapshot.get("companion") or {}
+        if companion.get("freezing") is True:
+            return False
+        if companion.get("overheating") is True:
+            return False
+        if companion.get("busy") is True:
+            return False
+        emergency = companion.get("emergency") or {}
+        if isinstance(emergency, dict) and emergency.get("active") is True:
+            return False
+        health = companion.get("health")
+        max_health = companion.get("max_health")
+        if (
+            isinstance(health, (int, float))
+            and isinstance(max_health, (int, float))
+            and max_health > 0
+            and health / max_health < 0.45
+        ):
+            return False
+        hunger = companion.get("hunger")
+        max_hunger = companion.get("max_hunger")
+        if (
+            isinstance(hunger, (int, float))
+            and isinstance(max_hunger, (int, float))
+            and max_hunger > 0
+            and hunger / max_hunger < 0.35
+        ):
+            return False
+        return True
 
     def _ambient_loop(self) -> None:
         minimum = max(30.0, self.settings.ambient_chat_min_seconds)
@@ -2114,6 +2836,8 @@ class CompanionService:
             if not snapshot or last_revision == self._last_decision_snapshot:
                 continue
             if not snapshot.get("player", {}).get("guid"):
+                continue
+            if not self._ambient_chat_allowed(snapshot, self.arbiter.active()):
                 continue
             try:
                 snapshot["journal"] = self.journal.context(20)
@@ -2145,9 +2869,25 @@ class CompanionService:
         intent_id: str,
         source: str,
     ) -> None:
+        now = time.time()
+        text = self._compact_player_reply(str(reply["text"]), source)
+        if not text:
+            return
+        throttle_key = (source, text)
+        if source in {"recovery", "emergency", "ambient"}:
+            with self._lock:
+                previous = self._recent_reply_at.get(throttle_key, 0.0)
+                if now - previous < 120:
+                    return
+                self._recent_reply_at[throttle_key] = now
+                self._recent_reply_at = {
+                    key: seen_at
+                    for key, seen_at in self._recent_reply_at.items()
+                    if now - seen_at < 600
+                }
         message = {
             "id": str(uuid.uuid4()),
-            "text": str(reply["text"]),
+            "text": text,
             "expects_response": bool(reply.get("expects_response", False)),
             "intent_id": intent_id,
             "source": source,
@@ -2169,3 +2909,36 @@ class CompanionService:
                 "message_id": message["id"],
             },
         )
+
+    @staticmethod
+    def _compact_player_reply(text: str, source: str) -> str:
+        normalized = " ".join(text.split())
+        if not normalized or source not in COMPACT_REPLY_SOURCES:
+            return normalized
+
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[。！？!?])", normalized)
+            if sentence.strip()
+        ]
+        meaningful = [
+            sentence
+            for sentence in sentences
+            if INTERNAL_REPLY_TEXT.search(sentence) is None
+        ]
+        if not meaningful:
+            return ""
+        compact = "".join(meaningful)
+        if len(compact) <= PLAYER_REPLY_MAX_CHARS:
+            return compact
+
+        window = compact[:PLAYER_REPLY_MAX_CHARS]
+        boundary = max(
+            window.rfind("。"),
+            window.rfind("！"),
+            window.rfind("？"),
+            window.rfind("；"),
+        )
+        if boundary >= 24:
+            return window[: boundary + 1]
+        return window.rstrip("，,；;：: ") + "。"

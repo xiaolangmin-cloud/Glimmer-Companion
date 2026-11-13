@@ -103,11 +103,18 @@ class DeepSeekPlanner:
             if self.agent_memory is not None
             else None
         )
-        recent_chat = (
-            self.agent_memory.recent_chat("chat", limit=10)
+        chat_context = (
+            self.agent_memory.chat_context(
+                "chat",
+                recent_limit=10,
+                max_recent_chars=6000,
+                max_summary_chars=2500,
+            )
             if self.agent_memory is not None
-            else []
+            else {"summary": "", "recent": []}
         )
+        chat_summary = str(chat_context.get("summary") or "")
+        recent_chat = list(chat_context.get("recent") or [])
         world_context = (
             self.agent_memory.world_context(
                 str(snapshot.get("world", {}).get("shard") or ""),
@@ -118,6 +125,35 @@ class DeepSeekPlanner:
             else []
         )
         model_snapshot = dict(snapshot)
+        list_schedules = (
+            getattr(self.agent_memory, "scheduled_tasks", None)
+            if self.agent_memory is not None
+            else None
+        )
+        scheduled_tasks = (
+            list_schedules(limit=20)
+            if callable(list_schedules)
+            else []
+        )
+        world = snapshot.get("world") or {}
+        list_due_schedules = (
+            getattr(self.agent_memory, "due_scheduled_tasks", None)
+            if self.agent_memory is not None
+            else None
+        )
+        due_tasks = (
+            list_due_schedules(
+                day=world.get("day"),
+                phase=world.get("phase"),
+                moon_phase=world.get("moon_phase"),
+                shard=world.get("shard"),
+            )
+            if callable(list_due_schedules)
+            else []
+        )
+        model_snapshot["scheduled_tasks"] = scheduled_tasks
+        model_snapshot["due_scheduled_tasks"] = due_tasks
+        model_snapshot["world_points"] = world_context
         capabilities = dict(snapshot.get("capabilities") or {})
         recipes = capabilities.get("known_recipes") or []
         query_text = " ".join(
@@ -199,7 +235,9 @@ class DeepSeekPlanner:
                             ensure_ascii=False,
                             separators=(",", ":"),
                         )
-                        + "\n\n微光独立聊天室最近对话：\n"
+                        + "\n\n较早对话结果摘要（原始记录完整保存在本地）：\n"
+                        + (chat_summary or "无")
+                        + "\n\n最近完整对话：\n"
                         + json.dumps(
                             recent_chat,
                             ensure_ascii=False,
@@ -208,6 +246,18 @@ class DeepSeekPlanner:
                         + "\n\n微光记录过的当前世界资源与容器位置：\n"
                         + json.dumps(
                             world_context,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n\n持久任务排程：\n"
+                        + json.dumps(
+                            scheduled_tasks,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n\n当前已经到期的排程：\n"
+                        + json.dumps(
+                            due_tasks,
                             ensure_ascii=False,
                             separators=(",", ":"),
                         )

@@ -25,6 +25,7 @@ class DecisionBranchRouterTests(unittest.TestCase):
             "去采集附近的草": "collection",
             "帮我拿一些草": "collection",
             "做一个建造护符": "crafting",
+            "给我做一个背包": "crafting",
             "在火堆旁边建一个箱子": "construction",
             "去家里拿二十个金块": "transport",
             "把成熟作物收了再种胡萝卜": "farming",

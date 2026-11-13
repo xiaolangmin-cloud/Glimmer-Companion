@@ -21,24 +21,30 @@
       "patterns": [
         {"pattern": "打|攻击|击杀|杀掉|战斗|迎战|拦住|击退|清理", "weight": 8},
         {"pattern": "蜘蛛|猎犬|青蛙|巨鹿|熊獾|龙蝇|蜂后|蚁狮|克劳斯|触手|鱼人|发条", "weight": 8},
-        {"pattern": "保护我|掩护|挡住|死战|撤退|别追|不要追", "weight": 14}
+        {"pattern": "保护我|掩护|挡住|死战|撤退|别追|不要追|停止战斗|停手|别打了|不要打了", "weight": 14}
       ],
       "objective": "在保护玩家和自身安全的前提下处理敌对目标。",
       "required_checks": [
         "目标身份、数量、当前生命和攻击距离",
-        "微光生命、护甲、武器伤害和预计下一次受伤",
+        "微光生命、武器伤害、头部与身体护甲的乘算总减伤和护甲耐久",
+        "击杀所需回合、敌群规模、预计承伤和下一次可能致命伤",
         "玩家距离、撤退路线和战斗安全距离",
         "角色技能、物品消耗和施法冷却"
       ],
       "decision_order": [
         "先判断普通武器和护甲能否安全解决",
+        "需要承伤时同时评估头部和身体两个护甲槽，不能把两件减伤直接相加",
         "能安全解决时保持普通战斗，不消耗技能资源",
         "压力超出装备承受范围时再选择控制、召唤或撤退",
         "下一次受击可能致命且未获死战许可时优先撤退"
       ],
       "rules": [
-        "暗影决斗者负责伤害和承伤，暗影蝶只制造恐慌，暗影牢笼只定身且会吸引仇恨",
-        "暗影蝶对 Boss 无效；暗影牢笼对 Boss 的持续时间约为普通目标的一半",
+        "麦斯威尔的法典每次召唤消耗法典耐久和理智；通常保留到普通武器与双件护甲不足以安全处理时才施法",
+        "暗影仆从只在召唤点附近工作约 4 分钟，适合资源密集的采矿、伐木和挖掘；目标稀疏或位置会快速变化时不要提前召唤",
+        "暗影决斗者闲置约 10 秒会消失，必须先有实际战斗目标再召唤，不能当作长期护卫",
+        "暗影牢笼主要限制移动、不会造成伤害并会吸引仇恨；对普通生物约 24 秒、对 Boss 约 12 秒，不能把控制时长当成已击杀",
+        "暗影蝶陷阱适合让普通敌群恐慌 12 秒并持续约 3 天，但 Boss 免疫；不要对 Boss 浪费",
+        "同时存在的暗影傀儡通常不超过 5 个，继续堆到 6 个以上容易引发影怪风险",
         "不为了追击目标远离玩家，除非任务明确允许独立远行",
         "战斗结果必须根据事件确认，不能把目标失踪说成自己击杀"
       ],
@@ -47,7 +53,12 @@
         "https://dontstarve.wiki.gg/wiki/Codex_Umbra/DST",
         "https://dontstarve.wiki.gg/wiki/Shadow_Traps",
         "https://dontstarve.wiki.gg/wiki/Frog/DST",
-        "https://dontstarve.wiki.gg/wiki/Frog_Rain/DST"
+        "https://dontstarve.wiki.gg/wiki/Frog_Rain/DST",
+        "https://dontstarve.wiki.gg/wiki/Armor",
+        "https://dontstarve.wiki.gg/wiki/Don%27t_Starve_Together/Version_History/2022",
+        "https://dontstarve.wiki.gg/wiki/Guides/Combatting_Bosses",
+        "https://dontstarve.wiki.gg/wiki/Guides/Hound_Wave_Survival_Guide",
+        "https://dontstarve.wiki.gg/wiki/Guides/Mob_Killing_Guide"
       ]
     },
     {
@@ -95,6 +106,10 @@
       "task_types": ["crafting"],
       "skill_actions": ["USEITEM", "USEITEMON"],
       "patterns": [
+        {
+          "pattern": "(?:^|[，。！？ ])(?:请|帮我|给我)?(?:制作|合成|做)(?:一|个|把|件|顶|座|口)",
+          "weight": 30
+        },
         {"pattern": "制作|合成|做|造|配方|原型|解锁", "weight": 7},
         {"pattern": "斧头|镐子|护符|工具|装备|药剂|料理", "weight": 8}
       ],
@@ -220,7 +235,9 @@
       ],
       "completion_signals": ["播种完成", "成熟作物收取", "缺少种子或耕地", "季节不适"],
       "sources": [
-        "https://dontstarve.wiki.gg/wiki/Farming/DST"
+        "https://dontstarve.wiki.gg/wiki/Farming/DST",
+        "https://dontstarve.wiki.gg/wiki/Farm_Plant",
+        "https://dontstarve.wiki.gg/wiki/Giant_Crops"
       ]
     },
     {
@@ -249,11 +266,21 @@
       ],
       "rules": [
         "灾害应急由本地 Lua 优先处理",
+        "先看体温趋势、季节、昼夜和携带物资，在过冷或过热真正造成伤害前穿衣、补燃料或返回安全区",
+        "冬季至少核对保暖、光源、燃料和食物；入冬前优先补足耐久较高的食物与可靠火源",
+        "夏季至少核对体温控制、冷源和基地防火；春季至少核对避雨、雷击与青蛙雨风险",
+        "快坏食物先吃；有锅、营火、晾肉架或冰箱等真实设施时，再考虑通过烹饪、晾晒和冷藏减少浪费",
         "不在危险攻击范围内睡觉或进食",
         "恢复完成后重新评估原任务是否仍然可行"
       ],
       "completion_signals": ["生命或饥饿恢复到安全值", "恢复物品耗尽", "环境不允许恢复"],
-      "sources": []
+      "sources": [
+        "https://dontstarve.wiki.gg/wiki/Food/DST",
+        "https://dontstarve.wiki.gg/wiki/Ice_Box",
+        "https://dontstarve.wiki.gg/wiki/Seasons/DST",
+        "https://dontstarve.wiki.gg/wiki/Freezing",
+        "https://dontstarve.wiki.gg/wiki/Overheating"
+      ]
     },
     {
       "id": "exploration",
@@ -295,6 +322,10 @@
       "task_types": ["base", "storage"],
       "skill_actions": ["USEITEM", "USEITEMON"],
       "patterns": [
+        {
+          "pattern": "家务|收拾|打扫|照料自己|自己看着办|随便找点活|找点活干",
+          "weight": 34
+        },
         {"pattern": "整理|归类|收纳|存放|维护|基地|营地|做饭|烹饪|打开箱子|清点", "weight": 14},
         {"pattern": "箱子|冰箱|晾肉架|锅|储物", "weight": 5}
       ],
@@ -314,7 +345,9 @@
       "rules": [
         "不擅自丢弃玩家未明确批准的物品",
         "危险品和任务材料单独处理",
-        "整理不触发大范围重新布置"
+        "整理不触发大范围重新布置",
+        "晾肉架先收成品，空架只逐份晾快坏、可晾且未预留的食材",
+        "自主消耗保留最后一份应急食物和燃料，不为了家务清空底线"
       ],
       "completion_signals": ["目标容器整理完毕", "空间不足", "发现危险品"],
       "sources": [

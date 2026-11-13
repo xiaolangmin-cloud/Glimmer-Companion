@@ -8,6 +8,31 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _windows_user_env(name: str) -> str | None:
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Environment",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, name)
+    except (ImportError, OSError):
+        return None
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _process_env(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is not None and value.strip():
+        return value
+    return _windows_user_env(name)
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str
@@ -34,7 +59,7 @@ class Settings:
         return cls(
             host=os.getenv("CODEX_COMPANION_HOST", "127.0.0.1"),
             port=int(os.getenv("CODEX_COMPANION_PORT", "8765")),
-            deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
+            deepseek_api_key=_process_env("DEEPSEEK_API_KEY"),
             deepseek_base_url=os.getenv(
                 "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
             ).rstrip("/"),

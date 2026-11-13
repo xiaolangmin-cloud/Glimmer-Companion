@@ -49,18 +49,24 @@ RESOURCE_TARGETS = {
     },
     "wood": {
         "label": "木头",
-        "prefabs": ["evergreen", "deciduoustree", "twiggytree"],
+        "prefabs": ["evergreen", "deciduoustree"],
         "drop": "log",
+        "tool": "axe",
+        "assist_minion": "shadowworker",
     },
     "rocks": {
         "label": "石头",
         "prefabs": ["rock1", "rock2", "rock_flintless"],
         "drop": "rocks",
+        "tool": "pickaxe",
+        "assist_minion": "shadowworker",
     },
     "gold": {
         "label": "金块",
-        "prefabs": ["rock2", "rock_flintless"],
+        "prefabs": ["rock2"],
         "drop": "goldnugget",
+        "tool": "pickaxe",
+        "assist_minion": "shadowworker",
     },
 }
 
@@ -93,6 +99,7 @@ CRAFT_TARGETS = {
     "pickaxe": {"label": "镐子", "text": "做一把镐子"},
     "shovel": {"label": "铲子", "text": "做一把铲子"},
     "hammer": {"label": "锤子", "text": "做一把锤子"},
+    "farm_hoe": {"label": "园艺锄", "text": "做一把园艺锄"},
     "torch": {"label": "火把", "text": "做一支火把"},
     "rope": {"label": "绳子", "text": "做一根绳子"},
     "boards": {"label": "木板", "text": "做一些木板"},
@@ -308,6 +315,10 @@ def build_intent(
                     "arrive_distance": 4,
                     "target_prefabs": resource["prefabs"],
                     "amount": command.amount,
+                    "drop_prefab": resource.get("drop"),
+                    "required_tool": resource.get("tool"),
+                    "assist_minion_prefab": resource.get("assist_minion"),
+                    "max_assist_workers": 2,
                     "ignore_player_leash": True,
                 },
             }, (
@@ -424,6 +435,7 @@ def build_intent(
                     "arrive_distance": 3,
                     "amount": command.amount,
                     "ignore_player_leash": True,
+                    "allow_partial": True,
                 },
             }, f"收到，我去收成熟作物，最多 {command.amount} 个。"
         if action == "plant":
@@ -446,13 +458,22 @@ def build_intent(
                 "params": {
                     "wheel_command": True,
                     "item_prefab": command.target_id,
+                    "prefer_existing_soil": True,
+                    "till_if_needed": True,
+                    "soil_search_radius": 16,
+                    "till_search_radius": 6,
                 },
             }, f"收到，我在附近种下{label}。"
         return {
             **base,
             "mode": "till",
             "position": player_position,
-            "params": {"wheel_command": True},
+            "params": {
+                "wheel_command": True,
+                "required_tool": "farm_hoe",
+                "craft_tool_if_missing": True,
+                "soil_search_radius": 6,
+            },
         }, "收到，我先耕一格地。"
 
     if branch == "survival":
@@ -507,6 +528,7 @@ def build_intent(
             "params": {
                 "wheel_command": True,
                 "ignore_autonomous_recovery": False,
+                "force_recovery_check": True,
             },
         }, "好，我会在条件合适时去帐篷恢复三维。"
 
@@ -517,14 +539,15 @@ def build_intent(
                 return None, "还没有记录“家/基地/仓库”的位置。"
             return {
                 **base,
-                "mode": "move_to_landmark",
-                "lease_seconds": 1800,
+                "mode": "homestead",
+                "lease_seconds": 24 * 60 * 60,
                 "params": {
                     "wheel_command": True,
                     "landmark": landmark,
+                    "stay_home": True,
                     "stop_distance": 4,
                 },
-            }, f"收到，我记得“{landmark}”的位置，现在就回去。"
+            }, f"收到，我回“{landmark}”待命。"
         resource = RESOURCE_TARGETS.get(command.target_id or "")
         if resource is None:
             raise WheelCommandError("unknown exploration resource")
@@ -550,14 +573,15 @@ def build_intent(
                 return None, "还没有记录“家/基地/仓库”的位置。"
             return {
                 **base,
-                "mode": "move_to_landmark",
-                "lease_seconds": 1800,
+                "mode": "homestead",
+                "lease_seconds": 24 * 60 * 60,
                 "params": {
                     "wheel_command": True,
                     "landmark": landmark,
+                    "stay_home": True,
                     "stop_distance": 4,
                 },
-            }, f"收到，我回“{landmark}”。"
+            }, f"收到，我回“{landmark}”待命。"
         return None, ""
 
     if branch == "interaction":
@@ -621,14 +645,15 @@ def build_intent(
             return None, "还没有记录“家/基地/仓库”的位置。"
         return {
             **base,
-            "mode": "move_to_landmark",
-            "lease_seconds": 1800,
+            "mode": "homestead",
+            "lease_seconds": 24 * 60 * 60,
             "params": {
                 "wheel_command": True,
                 "landmark": landmark,
+                "stay_home": True,
                 "stop_distance": 4,
             },
-        }, f"收到，我回“{landmark}”。"
+        }, f"收到，我回“{landmark}”待命。"
 
     return None, ""
 

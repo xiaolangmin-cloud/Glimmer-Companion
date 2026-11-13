@@ -87,6 +87,34 @@ class BranchPolicyEngineTests(unittest.TestCase):
         self.assertEqual(decision.intent["mode"], "combat")
         self.assertEqual(decision.intent["target_guid"], "5")
 
+    def test_explicit_stop_combat_retreats_immediately(self) -> None:
+        branches = DecisionBranchRouter(
+            ROOT / "config" / "decision_branches.json"
+        )
+        snapshot = {
+            "companion": {"health": 80, "max_health": 150},
+            "nearby": [
+                {
+                    "guid": "frog-1",
+                    "prefab": "frog",
+                    "hostile": True,
+                    "health": 100,
+                    "distance": 3,
+                }
+            ],
+        }
+        branch = branches.classify("停止战斗，马上回来", snapshot)
+
+        decision = BranchPolicyEngine().decide(
+            "停止战斗，马上回来",
+            snapshot,
+            branch,
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent["mode"], "retreat")
+        self.assertEqual(decision.reason, "explicit_retreat")
+
     def test_unarmed_character_does_not_box_a_full_health_frog(self) -> None:
         snapshot = self.snapshot()
         snapshot["nearby"] = [
@@ -123,6 +151,40 @@ class BranchPolicyEngineTests(unittest.TestCase):
         assert decision is not None
         self.assertEqual(decision.intent["mode"], "combat")
         self.assertEqual(decision.intent["target_prefab"], "frog")
+
+    def test_branch_policy_counts_head_and_body_armor_together(self) -> None:
+        snapshot = self.snapshot()
+        snapshot["inventory"] = [
+            {"prefab": "spear", "stacksize": 1},
+            {
+                "prefab": "armorwood",
+                "stacksize": 1,
+                "condition_percent": 100,
+            },
+            {
+                "prefab": "armorfootball",
+                "stacksize": 1,
+                "condition_percent": 100,
+            },
+        ]
+        snapshot["nearby"] = [
+            {
+                "guid": str(index),
+                "prefab": "frog",
+                "hostile": True,
+                "distance": index,
+            }
+            for index in range(1, 5)
+        ]
+
+        decision = self.decide("帮我打一下这些青蛙", snapshot)
+
+        assert decision is not None
+        self.assertEqual(decision.intent["mode"], "combat")
+        self.assertAlmostEqual(
+            decision.intent["params"]["armor_absorb"],
+            0.96,
+        )
 
     def test_collection_farming_transport_and_survival_are_local(self) -> None:
         snapshot = self.snapshot()
@@ -186,13 +248,127 @@ class BranchPolicyEngineTests(unittest.TestCase):
         self.assertEqual(decision.intent["mode"], "hold")
         self.assertIn("材料不足", decision.reply)
 
-    def test_known_landmark_routes_without_model(self) -> None:
+    def test_crafting_distinguishes_unknown_recipe_from_missing_materials(
+        self,
+    ) -> None:
+        snapshot = self.snapshot()
+        snapshot["capabilities"] = {
+            "known_recipes": [
+                {
+                    "name": "axe",
+                    "product": "axe",
+                    "known": False,
+                    "available": False,
+                }
+            ]
+        }
+        decision = self.decide("做一把斧头", snapshot)
+        assert decision is not None
+        self.assertEqual(decision.intent["mode"], "hold")
+        self.assertIn("没学会", decision.reply)
+
+    def test_home_command_returns_and_stays_without_model(self) -> None:
         snapshot = self.snapshot()
         snapshot["landmarks"] = {"家": {"shard": "1", "x": 10, "z": 20}}
         decision = self.decide("带我回家里", snapshot)
         assert decision is not None
-        self.assertEqual(decision.intent["mode"], "move_to_landmark")
+        self.assertEqual(decision.intent["mode"], "homestead")
         self.assertEqual(decision.intent["params"]["landmark"], "家")
+        self.assertTrue(decision.intent["params"]["stay_home"])
+
+    def test_establish_home_creates_persistent_base_mode(self) -> None:
+        decision = self.decide("这里是我的家", self.snapshot())
+
+        assert decision is not None
+        self.assertEqual(decision.intent["mode"], "homestead")
+        self.assertTrue(decision.intent["params"]["establish_home"])
+        self.assertTrue(decision.intent["params"]["stay_home"])
+        self.assertEqual(decision.intent["params"]["name"], "家")
+
+    def test_home_chore_request_returns_and_starts_autonomy(self) -> None:
+        snapshot = self.snapshot()
+        snapshot["home"] = {
+            "name": "家",
+            "x": 80,
+            "z": 80,
+            "shard": "1",
+        }
+        snapshot["landmarks"] = {
+            "家": {"x": 80, "z": 80, "shard": "1"}
+        }
+
+        decision = self.decide("帮我回家把基地收拾一下", snapshot)
+
+        assert decision is not None
+        self.assertEqual(decision.rule_id, "base.run_home_chores")
+        self.assertEqual(decision.intent["mode"], "homestead")
+        self.assertTrue(decision.intent["params"]["stay_home"])
+        self.assertIn("先回“家”", decision.reply)
+
+        snapshot["companion"]["x"] = 78
+        snapshot["companion"]["z"] = 79
+        decision = self.decide("你看着办，找点家务做", snapshot)
+        assert decision is not None
+        self.assertIn("先把家里", decision.reply)
+
+        branches = DecisionBranchRouter(
+            ROOT / "config" / "decision_branches.json"
+        )
+        branch = branches.classify("你看着办，找点家务做", snapshot)
+        self.assertEqual(branch.branch_id, "base")
+
+    def test_glommer_request_schedules_full_moon_with_known_statue(self) -> None:
+        snapshot = self.snapshot()
+        snapshot["home"] = {"name": "家", "x": 10, "z": 20, "shard": "1"}
+        snapshot["decision_support"] = {
+            "calendar": {
+                "glommer": {
+                    "known_points": [
+                        {
+                            "prefab": "statueglommer",
+                            "x": 420,
+                            "z": -180,
+                        }
+                    ]
+                }
+            }
+        }
+
+        decision = self.decide("帮我把格罗姆接回来", snapshot)
+
+        assert decision is not None
+        self.assertEqual(
+            decision.rule_id,
+            "exploration.glommer_scheduled",
+        )
+        self.assertEqual(decision.intent["mode"], "homestead")
+        self.assertEqual(decision.intent["params"]["landmark"], "家")
+        assert isinstance(decision.schedule, dict)
+        self.assertEqual(decision.schedule["kind"], "glommer_pickup")
+        self.assertEqual(decision.schedule["due_phase"], "night")
+        self.assertEqual(decision.schedule["due_moon_phase"], "full")
+        self.assertEqual(decision.schedule["x"], 420)
+        self.assertEqual(decision.schedule["z"], -180)
+        self.assertEqual(
+            decision.schedule["details"]["return_landmark"],
+            "家",
+        )
+
+    def test_glommer_request_without_location_does_not_fake_coordinates(
+        self,
+    ) -> None:
+        decision = self.decide("帮我接格罗姆", self.snapshot())
+
+        assert decision is not None
+        self.assertEqual(
+            decision.rule_id,
+            "exploration.glommer_schedule_needs_location",
+        )
+        assert isinstance(decision.schedule, dict)
+        self.assertIsNone(decision.schedule["x"])
+        self.assertIsNone(decision.schedule["z"])
+        self.assertFalse(decision.schedule["details"]["statue_known"])
+        self.assertIn("还没掌握雕像坐标", decision.reply)
 
 
 if __name__ == "__main__":

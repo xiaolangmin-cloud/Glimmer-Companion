@@ -75,6 +75,46 @@ class AgentMemoryTests(unittest.TestCase):
                 memory.close()
             self.assertEqual(before, list(vault.rglob("*")))
 
+    def test_chat_context_compacts_results_but_keeps_raw_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AgentMemoryStore(Path(tmp) / "agent.sqlite3")
+            try:
+                for index in range(30):
+                    memory.record_chat(
+                        "chat",
+                        "user",
+                        f"已完成任务 {index}，结果是拿到 {index} 个草",
+                    )
+                    memory.record_chat(
+                        "chat",
+                        "companion",
+                        f"第 {index} 轮已经完成并汇报",
+                    )
+
+                context = memory.chat_context(
+                    "chat",
+                    recent_limit=8,
+                    max_recent_chars=500,
+                    max_summary_chars=900,
+                )
+
+                self.assertEqual(context["raw_count"], 60)
+                self.assertEqual(
+                    len(memory.recent_chat("chat", limit=100)),
+                    60,
+                )
+                self.assertLessEqual(len(context["recent"]), 8)
+                self.assertLessEqual(
+                    sum(len(item["text"]) for item in context["recent"]),
+                    500,
+                )
+                self.assertIn("已完成任务", context["summary"])
+                self.assertLessEqual(len(context["summary"]), 900)
+                self.assertGreater(context["summarized_through_id"], 0)
+                self.assertLess(context["summarized_through_id"], 60)
+            finally:
+                memory.close()
+
     def test_project_implementation_memory_is_isolated_and_budgeted(
         self,
     ) -> None:
@@ -114,6 +154,56 @@ class AgentMemoryTests(unittest.TestCase):
             finally:
                 memory.close()
             self.assertEqual(before, list(vault.rglob("*")))
+
+    def test_scheduled_tasks_persist_and_only_become_due_on_conditions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "agent.sqlite3"
+            memory = AgentMemoryStore(database)
+            try:
+                task_id = memory.save_scheduled_task(
+                    kind="glommer_pickup",
+                    goal="满月去格罗姆雕像接回格罗姆",
+                    due_phase="night",
+                    due_moon_phase="full",
+                    shard="1",
+                    x=42,
+                    z=-18,
+                    details={"return_landmark": "家"},
+                )
+                self.assertGreater(task_id, 0)
+                active = memory.scheduled_tasks()
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0]["details"]["return_landmark"], "家")
+                self.assertEqual(
+                    memory.due_scheduled_tasks(
+                        day=9,
+                        phase="dusk",
+                        moon_phase="full",
+                        shard="1",
+                    ),
+                    [],
+                )
+                due = memory.due_scheduled_tasks(
+                    day=10,
+                    phase="night",
+                    moon_phase="full",
+                    shard="1",
+                )
+                self.assertEqual([item["id"] for item in due], [task_id])
+                memory.update_scheduled_task(task_id, status="completed")
+                self.assertEqual(memory.scheduled_tasks(), [])
+            finally:
+                memory.close()
+
+            reopened = AgentMemoryStore(database)
+            try:
+                completed = reopened.scheduled_tasks(status="completed")
+                self.assertEqual(len(completed), 1)
+                self.assertEqual(completed[0]["goal"], "满月去格罗姆雕像接回格罗姆")
+            finally:
+                reopened.close()
 
 
 if __name__ == "__main__":

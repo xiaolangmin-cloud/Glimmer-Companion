@@ -7,3 +7,6 @@ logs/
 .venv/
 venv/
 .env
+.codex/
+AGENTS.md
+.dsh-memory-enabled

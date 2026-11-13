@@ -119,6 +119,38 @@
       }
     },
     {
+      "id": "generic.chop_trees",
+      "task_type": "gathering",
+      "priority": 89,
+      "patterns": [
+        "^(?:去|帮我|给我)?(?:砍|砍伐|伐)(?:一下|一些|点|几棵)?(?:附近|周围|旁边)?(?:的)?(?:树|树木|常青树)(?:吧|一下)?[。！!]*$"
+      ],
+      "direct": true,
+      "reply": "好，我先看看附近有没有能砍的树。",
+      "intent": {
+        "mode": "harvest_area",
+        "position": "$player_position",
+        "target_prefab": "evergreen",
+        "lease_seconds": 900,
+        "reason": "local_chop_trees",
+        "params": {
+          "radius": 32,
+          "arrive_distance": 4,
+          "target_prefabs": [
+            "evergreen",
+            "deciduoustree",
+            "twiggytree"
+          ],
+          "amount": 1,
+          "drop_prefab": "log",
+          "required_tool": "axe",
+          "assist_minion_prefab": "shadowworker",
+          "max_assist_workers": 2,
+          "ignore_player_leash": true
+        }
+      }
+    },
+    {
       "id": "generic.collect_berries",
       "task_type": "gathering",
       "priority": 86,
